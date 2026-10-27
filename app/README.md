@@ -75,7 +75,7 @@ own GitHub remote — this checkout's `origin` still points at the upstream
 - **No persistence.** Documents live in the form fields for the lifetime of the page; nothing is
   written to `localStorage`, `sessionStorage`, IndexedDB or cookies.
 - **Data never leaves the browser.** Encoding, decoding, validation and QR generation are pure
-  in-browser computation; uploaded QR images are read with a local `Blob`/`FileReader` and never
+  in-browser computation; uploaded QR images are read locally with `createImageBitmap` and never
   transmitted. Clipboard and download use browser-local APIs only.
 - **Camera needs HTTPS.** `getUserMedia` is only available in a secure context; GitHub Pages
   serves over HTTPS, so scanning works there. On `http://localhost` it also works. Image upload

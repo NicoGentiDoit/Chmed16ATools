@@ -34,6 +34,7 @@ export const STRINGS = {
   noFindings: 'No problems found.',
   notValidated: 'Not checked yet.',
   emptyInput: 'Enter a document first.',
+  analysisFailed: 'The document could not be analyzed.',
 
   chmedOutputHeading: 'Encoded CHMED16A string',
   chmedOutputLabel: 'CHMED16A string',
@@ -42,10 +43,13 @@ export const STRINGS = {
   copyChmedAccessibleName: 'Copy encoded CHMED16A string',
   download: 'Download',
   downloadChmedAccessibleName: 'Download encoded CHMED16A string as a .txt file',
+  downloadPng: 'Download PNG',
+  downloadPngAccessibleName: 'Download the QR code as a PNG image',
   copied: 'Copied to the clipboard.',
   copyFailed: 'Clipboard unavailable. Select the text and copy it manually.',
   chmedFilename: 'chmed16a.txt',
   jsonFilename: 'chmed16a.json',
+  qrFilename: 'chmed16a-qr.png',
 
   qrHeading: 'QR code',
   qrEcLabel: 'QR error-correction level',
@@ -55,6 +59,8 @@ export const STRINGS = {
   qrOverflow:
     'The document does not fit a QR code at error-correction level {level} ({bytes} UTF-8 bytes). Choose a lower level or shorten the document.',
   qrEmpty: 'Encode a document to see its QR code.',
+  qrPngFailed:
+    'The QR code could not be exported as a PNG image. Try again or take a screenshot of the preview.',
 
   chmedInputLabel: 'CHMED16A document',
   chmedInputHint:

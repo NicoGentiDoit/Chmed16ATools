@@ -54,7 +54,17 @@ export type WarningCode =
   | 'pfields-ignored'
   | 'rev1-assumption'
   | 'unknown-revision'
-  | 'indc-revision';
+  | 'indc-revision'
+  | 'posology-cardinality'
+  | 'rx-length'
+  | 'rx-id-uuid';
+
+/**
+ * Message of the blocking finding produced when a recursive walk exceeds the
+ * JavaScript call stack. Exported so the UI's second-net `catch` reports the
+ * same wording.
+ */
+export const NESTING_TOO_DEEP_MESSAGE = 'Document is nested too deeply to analyze.';
 
 export interface ValidationResult {
   ok: boolean;
@@ -147,9 +157,6 @@ export function validateObject(
   object: unknown,
   context?: ValidationContext,
 ): ValidationResult {
-  const errors: ValidationError[] = [];
-  const warnings: ValidationWarning[] = [];
-
   if (!isRecord(object)) {
     return {
       ok: false,
@@ -161,9 +168,49 @@ export function validateObject(
           params: { type: 'object' },
         },
       ],
-      warnings,
+      warnings: [],
     };
   }
+
+  // A hostile or pathological document (thousands of nested levels) makes both
+  // Ajv's evaluation and the warning walkers exceed the call stack. That is a
+  // property of the input, not a bug, so it becomes a normal blocking finding.
+  try {
+    return analyzeObject(object, context);
+  } catch (error) {
+    if (!isNestingOverflow(error)) {
+      // Genuine validator failures must never be disguised as a nesting error.
+      throw error;
+    }
+    return {
+      ok: false,
+      errors: [
+        {
+          instancePath: '',
+          keyword: 'nesting',
+          message: NESTING_TOO_DEEP_MESSAGE,
+          params: {},
+        },
+      ],
+      warnings: [],
+    };
+  }
+}
+
+/**
+ * True for the `RangeError` raised when recursion exhausts the call stack.
+ * Other errors (including other `RangeError`s) are not nesting problems.
+ */
+export function isNestingOverflow(error: unknown): boolean {
+  return error instanceof RangeError && /call stack/i.test(error.message);
+}
+
+function analyzeObject(
+  object: Record<string, unknown>,
+  context?: ValidationContext,
+): ValidationResult {
+  const errors: ValidationError[] = [];
+  const warnings: ValidationWarning[] = [];
 
   const resolved = context ?? contextFor(object);
   const validate = validatorFor(resolved);
@@ -655,6 +702,15 @@ function collectPosologyWarnings(
   if (!Array.isArray(posValue)) {
     return;
   }
+  // `Pos` is 0-N for MP but 0-1 for PMC and Rx (`chmed16a/README.md:969-971`,
+  // `chmed16a/prescription.md:604-605`). Extra entries are kept and tolerated.
+  if (medType !== 1 && posValue.length > 1) {
+    warnings.push({
+      code: 'posology-cardinality',
+      path,
+      message: `"Pos" has ${posValue.length} entries; ${label} defines 0-1 (chmed16a/README.md:969-971, chmed16a/prescription.md:605). Accepted as a warning.`,
+    });
+  }
   const allowed = posologyAllowed(medType);
   posValue.forEach((posology, index) => {
     if (!isRecord(posology)) {
@@ -834,6 +890,130 @@ function collectRxWarnings(
       params: { auth, gln: personGln },
     });
   }
+
+  collectRxLengthWarnings(root, warnings);
+}
+
+/** `chmed16a/prescription.md:87`: Rx root `Id` is a 36-character RFC 4122 UUID. */
+const UUID_PATTERN =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/**
+ * Declared Rx lengths (`chmed16a/prescription.md:485-486`, `457-458`,
+ * `841-842`, `634-635`, `648-649`, `87`). They are warnings only: a longer
+ * value is still transmitted unchanged, so nothing is blocked.
+ */
+function collectRxLengthWarnings(
+  root: Record<string, unknown>,
+  warnings: ValidationWarning[],
+): void {
+  const patient = root.Patient;
+  if (isRecord(patient)) {
+    warnTooLong(
+      patient.Rcv,
+      13,
+      '/Patient/Rcv',
+      'Rcv',
+      'chmed16a/prescription.md:485-486',
+      warnings,
+    );
+    warnTooLong(
+      patient.Zip,
+      10,
+      '/Patient/Zip',
+      'Zip',
+      'chmed16a/prescription.md:457-458',
+      warnings,
+    );
+  }
+
+  const hcOrg = root.HcOrg;
+  if (isRecord(hcOrg)) {
+    warnTooLong(
+      hcOrg.Zip,
+      10,
+      '/HcOrg/Zip',
+      'Zip',
+      'chmed16a/prescription.md:841-842',
+      warnings,
+    );
+  }
+
+  const medicaments = root.Medicaments;
+  if (Array.isArray(medicaments)) {
+    medicaments.forEach((item, index) => {
+      if (!isRecord(item)) {
+        return;
+      }
+      const path = `/Medicaments/${index}`;
+      warnOutsideDigitRange(
+        item.Rep,
+        2,
+        childPath(path, 'Rep'),
+        'Rep',
+        'chmed16a/prescription.md:634-635',
+        warnings,
+      );
+      warnOutsideDigitRange(
+        item.NbPack,
+        10,
+        childPath(path, 'NbPack'),
+        'NbPack',
+        'chmed16a/prescription.md:648-649',
+        warnings,
+      );
+    });
+  }
+
+  if (typeof root.Id === 'string' && !UUID_PATTERN.test(root.Id)) {
+    warnings.push({
+      code: 'rx-id-uuid',
+      path: '/Id',
+      message: `"Id" is not a 36-character UUID (chmed16a/prescription.md:87, 279); accepted as a warning.`,
+    });
+  }
+}
+
+/** Pushes an `rx-length` warning for a string longer than its declared length. */
+function warnTooLong(
+  value: unknown,
+  maxLength: number,
+  path: string,
+  field: string,
+  specRef: string,
+  warnings: ValidationWarning[],
+): void {
+  if (typeof value !== 'string' || value.length <= maxLength) {
+    return;
+  }
+  warnings.push({
+    code: 'rx-length',
+    path,
+    message: `"${field}" has ${value.length} characters; the specification declares ${maxLength} (${specRef}). Accepted as a warning.`,
+  });
+}
+
+/** Pushes an `rx-length` warning for an integer wider than its declared digits. */
+function warnOutsideDigitRange(
+  value: unknown,
+  digits: number,
+  path: string,
+  field: string,
+  specRef: string,
+  warnings: ValidationWarning[],
+): void {
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    return;
+  }
+  const max = 10 ** digits - 1;
+  if (value >= 0 && value <= max) {
+    return;
+  }
+  warnings.push({
+    code: 'rx-length',
+    path,
+    message: `"${field}" is ${value}; the specification declares int(${digits}), i.e. 0-${max} (${specRef}). Accepted as a warning.`,
+  });
 }
 
 /**

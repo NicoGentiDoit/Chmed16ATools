@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { schemaDefs } from '../schema';
-import { validateJsonText, validateObject } from '../validate';
+import { NESTING_TOO_DEEP_MESSAGE, validateJsonText, validateObject } from '../validate';
 import type { ValidationResult } from '../validate';
 
 type Obj = Record<string, unknown>;
@@ -793,6 +793,130 @@ describe('Rx specifics', () => {
     const result = validateObject(root);
 
     expect(result.ok).toBe(true);
+  });
+});
+
+describe('deep nesting guard', () => {
+  /** A valid prescription plus an extra `Nested` object chain of `depth` levels. */
+  function deeplyNestedDocument(depth: number): Obj {
+    const root = rxExample(3);
+    let node = root;
+    for (let index = 0; index < depth; index += 1) {
+      const child: Obj = {};
+      node.Nested = child;
+      node = child;
+    }
+    return root;
+  }
+
+  it('returns a blocking nesting finding instead of throwing', () => {
+    const result = validateObject(deeplyNestedDocument(10_000));
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]?.message).toBe(NESTING_TOO_DEEP_MESSAGE);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('reports the same finding for deeply nested JSON text', () => {
+    const depth = 10_000;
+    const text = `${'{"a":'.repeat(depth)}{}${'}'.repeat(depth)}`;
+
+    const result = validateJsonText(text);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]?.message).toBe(NESTING_TOO_DEEP_MESSAGE);
+  });
+});
+
+describe('posology cardinality', () => {
+  it('warns when a PMC or Rx medicament has more than one Pos entry', () => {
+    const pmc = clone(officialExample);
+    pmc.MedType = 2;
+    medicaments(pmc)[0]!.Pos = [{ DtFrom: '2026-01-01' }, { DtFrom: '2026-02-01' }];
+
+    const pmcResult = validateObject(pmc);
+
+    expect(pmcResult.ok).toBe(true);
+    expect(pmcResult.warnings.filter((warning) => warning.code === 'posology-cardinality')).toEqual(
+      [expect.objectContaining({ path: '/Medicaments/0/Pos' })],
+    );
+
+    const rx = rxExample(3);
+    medicaments(rx)[0]!.Pos = [{ D: [1, 0, 0, 0] }, { D: [0, 1, 0, 0] }];
+
+    const rxResult = validateObject(rx);
+
+    expect(rxResult.ok).toBe(true);
+    expect(warningCodes(rxResult)).toContain('posology-cardinality');
+  });
+
+  it('keeps accepting several Pos entries for MP', () => {
+    const root = clone(officialExample);
+    const pos = medicaments(root)[0]!.Pos;
+    if (!Array.isArray(pos)) {
+      throw new Error('Pos missing');
+    }
+    pos.push({ D: [0, 0, 0, 0], DtFrom: '2016-03-01' });
+
+    const result = validateObject(root);
+
+    expect(result.ok).toBe(true);
+    expect(warningCodes(result)).not.toContain('posology-cardinality');
+  });
+});
+
+describe('Rx length warnings', () => {
+  it('warns about over-long Rcv, Zip, Rep and NbPack values', () => {
+    const root = rxExample(3);
+    const patient = asObj(root.Patient);
+    patient.Rcv = '7'.repeat(14);
+    patient.Zip = '1'.repeat(11);
+    asObj(root.HcOrg).Zip = '2'.repeat(11);
+    const medicament = medicaments(root)[0]!;
+    medicament.Rep = 100;
+    medicament.NbPack = 10_000_000_000;
+
+    const result = validateObject(root);
+
+    expect(result.ok).toBe(true);
+    const paths = result.warnings
+      .filter((warning) => warning.code === 'rx-length')
+      .map((warning) => warning.path)
+      .sort();
+    expect(paths).toEqual([
+      '/HcOrg/Zip',
+      '/Medicaments/0/NbPack',
+      '/Medicaments/0/Rep',
+      '/Patient/Rcv',
+      '/Patient/Zip',
+    ]);
+  });
+
+  it('warns when the Rx root Id is not a UUID', () => {
+    const root = rxExample(3);
+    root.Id = 'not-a-uuid';
+
+    const result = validateObject(root);
+
+    expect(result.ok).toBe(true);
+    expect(warningCodes(result)).toContain('rx-id-uuid');
+    expect(warningPaths(result)).toContain('/Id');
+  });
+
+  it('does not warn for values inside the declared lengths', () => {
+    const root = rxExample(3);
+    root.Id = '26D3DFF7-AB05-4737-A49C-5ECCD33595F6';
+    asObj(root.Patient).Rcv = '7'.repeat(13);
+    const medicament = medicaments(root)[0]!;
+    medicament.Rep = 99;
+    medicament.NbPack = 9_999_999_999;
+
+    const result = validateObject(root);
+
+    expect(warningCodes(result)).not.toContain('rx-length');
+    expect(warningCodes(result)).not.toContain('rx-id-uuid');
   });
 });
 

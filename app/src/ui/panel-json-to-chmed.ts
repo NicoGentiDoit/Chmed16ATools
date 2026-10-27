@@ -7,10 +7,11 @@
  */
 
 import { jsonToChmed } from '../core/encode';
+import type { EncodeResult } from '../core/encode';
 import { generateQr, qrToSvg } from '../core/qr-generate';
-import type { QrEcLevel } from '../core/qr-generate';
-import { validateJsonText } from '../core/validate';
-import type { ValidationError, ValidationWarning } from '../core/validate';
+import type { QrEcLevel, QrMatrix } from '../core/qr-generate';
+import { NESTING_TOO_DEEP_MESSAGE, isNestingOverflow, validateJsonText } from '../core/validate';
+import type { ValidationError, ValidationResult, ValidationWarning } from '../core/validate';
 import { format, text } from './strings';
 
 /** A validation finding flattened for rendering. */
@@ -29,6 +30,12 @@ const DEFAULT_EC_LEVEL: QrEcLevel = 'M';
 const INPUT_ID = 'json-to-chmed-input';
 const OUTPUT_ID = 'json-to-chmed-output';
 const EC_ID = 'json-to-chmed-ec';
+
+/** Pixels per module in the exported PNG (integer scale, hence crisp edges). */
+const PNG_MODULE_PX = 8;
+/** Quiet zone in modules (ISO/IEC 18004), matching the on-screen SVG. */
+const PNG_QUIET_ZONE_MODULES = 4;
+const PNG_MIME_TYPE = 'image/png';
 
 /* -------------------------------------------------------------------------- */
 /* Small DOM helpers                                                          */
@@ -228,6 +235,80 @@ function downloadText(filename: string, value: string, mimeType: string): void {
 }
 
 /* -------------------------------------------------------------------------- */
+/* QR raster export                                                           */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Draws a module map onto a fresh canvas: white background, black modules,
+ * 8 px per module and a 4-module quiet zone. Nothing else is painted, so the
+ * exported raster carries no metadata and no UI chrome.
+ *
+ * Returns `null` when the browser gives no 2D context.
+ */
+function rasterizeQr(matrix: QrMatrix): HTMLCanvasElement | null {
+  const canvas = el('canvas');
+  const modules = matrix.size + PNG_QUIET_ZONE_MODULES * 2;
+  canvas.width = modules * PNG_MODULE_PX;
+  canvas.height = modules * PNG_MODULE_PX;
+
+  const context = canvas.getContext('2d');
+  if (context === null) {
+    return null;
+  }
+
+  context.fillStyle = '#ffffff';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = '#000000';
+  for (let row = 0; row < matrix.size; row += 1) {
+    for (let col = 0; col < matrix.size; col += 1) {
+      if (matrix.data[(row * matrix.size + col) * 4] !== 0) {
+        continue;
+      }
+      context.fillRect(
+        (col + PNG_QUIET_ZONE_MODULES) * PNG_MODULE_PX,
+        (row + PNG_QUIET_ZONE_MODULES) * PNG_MODULE_PX,
+        PNG_MODULE_PX,
+        PNG_MODULE_PX,
+      );
+    }
+  }
+
+  return canvas;
+}
+
+/**
+ * Downloads the QR symbol as `chmed16a-qr.png`.
+ *
+ * `toDataURL` yields a self-contained image, so no object URL is created and
+ * therefore none has to be revoked.
+ */
+function downloadQrPng(matrix: QrMatrix): boolean {
+  const canvas = rasterizeQr(matrix);
+  if (canvas === null) {
+    return false;
+  }
+  try {
+    const link = el('a');
+    link.href = canvas.toDataURL(PNG_MIME_TYPE);
+    link.download = text('qrFilename');
+    document.body.append(link);
+    link.click();
+    link.remove();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Turns an unexpected throw (e.g. a stack overflow) into a blocking finding. */
+function unexpectedFinding(error: unknown): Finding {
+  return {
+    path: '',
+    message: isNestingOverflow(error) ? NESTING_TOO_DEEP_MESSAGE : text('analysisFailed'),
+  };
+}
+
+/* -------------------------------------------------------------------------- */
 /* Panel                                                                      */
 /* -------------------------------------------------------------------------- */
 
@@ -281,8 +362,13 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
     className: 'secondary',
     accessibleName: text('downloadChmedAccessibleName'),
   });
+  const pngButton = createButton(outputActions, text('downloadPng'), {
+    className: 'secondary',
+    accessibleName: text('downloadPngAccessibleName'),
+  });
   copyButton.disabled = true;
   downloadButton.disabled = true;
+  pngButton.disabled = true;
 
   const outputStatus = el('p', 'copy-status');
   outputStatus.setAttribute('aria-live', 'polite');
@@ -323,6 +409,8 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
   qrSection.append(ecField, preview, qrStatus, qrInfo);
 
   let lastChmed: string | null = null;
+  /** Module map of the symbol currently previewed, for the PNG export. */
+  let lastMatrix: QrMatrix | null = null;
 
   function readEcLevel(): QrEcLevel {
     const value = ecSelect.value;
@@ -333,6 +421,8 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
     preview.replaceChildren();
     qrInfo.textContent = '';
     qrStatus.classList.remove('is-error');
+    lastMatrix = null;
+    pngButton.disabled = true;
 
     if (lastChmed === null) {
       qrStatus.textContent = text('qrEmpty');
@@ -349,6 +439,8 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
       return;
     }
 
+    lastMatrix = result.matrix;
+    pngButton.disabled = false;
     qrStatus.textContent = '';
     preview.innerHTML = qrToSvg(result);
     const svg = preview.querySelector('svg');
@@ -378,7 +470,17 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
       resetOutput();
       return;
     }
-    const result = validateJsonText(input);
+    // Second net: the core already turns a stack overflow into a finding, but
+    // no unexpected throw may ever escape and blank the results area.
+    let result: ValidationResult;
+    try {
+      result = validateJsonText(input);
+    } catch (error) {
+      findings.render([unexpectedFinding(error)], []);
+      encodeButton.disabled = true;
+      resetOutput();
+      return;
+    }
     findings.render(errorFindings(result.errors), warningFindings(result.warnings));
     encodeButton.disabled = result.errors.length > 0;
     if (!result.ok) {
@@ -393,7 +495,15 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
       resetOutput();
       return;
     }
-    const result = jsonToChmed(input);
+    let result: EncodeResult;
+    try {
+      result = jsonToChmed(input);
+    } catch (error) {
+      findings.render([unexpectedFinding(error)], []);
+      encodeButton.disabled = true;
+      resetOutput();
+      return;
+    }
     const warnings = warningFindings(result.warnings);
     if (!result.ok) {
       findings.render(errorFindings(result.errors), warnings);
@@ -423,6 +533,13 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
 
   downloadButton.addEventListener('click', () => {
     downloadText(text('chmedFilename'), chmedOutput.value, 'text/plain;charset=utf-8');
+  });
+
+  pngButton.addEventListener('click', () => {
+    if (lastMatrix === null) {
+      return;
+    }
+    outputStatus.textContent = downloadQrPng(lastMatrix) ? '' : text('qrPngFailed');
   });
 
   findings.message(text('notValidated'));

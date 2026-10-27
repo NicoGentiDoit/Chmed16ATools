@@ -10,7 +10,12 @@
 import { chmedToJson } from '../core/decode';
 import type { DecodeError } from '../core/decode';
 import { readFileAsImageData, scanImageData, startCamera, stopCamera } from '../core/qr-scan';
-import { parseJsonText, validateObject } from '../core/validate';
+import {
+  NESTING_TOO_DEEP_MESSAGE,
+  isNestingOverflow,
+  parseJsonText,
+  validateObject,
+} from '../core/validate';
 import type { ValidationError, ValidationWarning } from '../core/validate';
 import { text } from './strings';
 
@@ -232,6 +237,14 @@ function downloadText(filename: string, value: string, mimeType: string): void {
   window.setTimeout(() => {
     URL.revokeObjectURL(url);
   }, 0);
+}
+
+/** Turns an unexpected throw (e.g. a stack overflow) into a blocking finding. */
+function unexpectedFinding(error: unknown): Finding {
+  return {
+    path: '',
+    message: isNestingOverflow(error) ? NESTING_TOO_DEEP_MESSAGE : text('analysisFailed'),
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -460,6 +473,17 @@ export function mountChmedToJson(container: HTMLElement): Panel {
       return;
     }
 
+    // Second net around decode, pretty-printing and validation: the core turns
+    // a stack overflow into a finding, but no unexpected throw may escape.
+    try {
+      decodeDocument(value);
+    } catch (error) {
+      findings.render([unexpectedFinding(error)], []);
+      clearOutput();
+    }
+  }
+
+  function decodeDocument(value: string): void {
     const decoded = chmedToJson(value);
     if (!decoded.ok) {
       findings.render(decodeFindings(decoded.errors), []);
