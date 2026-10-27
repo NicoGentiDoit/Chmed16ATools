@@ -14,6 +14,11 @@ import { NESTING_TOO_DEEP_MESSAGE, isNestingOverflow, validateJsonText } from '.
 import type { ValidationError, ValidationResult, ValidationWarning } from '../core/validate';
 import { format, text } from './strings';
 
+/** Lucide icon name → inline SVG string. */
+function svg(name: string): string {
+  return `<i data-lucide="${name}" aria-hidden="true" style="width:1em;height:1em;vertical-align:-0.125em"></i>`;
+}
+
 /** A validation finding flattened for rendering. */
 interface Finding {
   readonly path: string;
@@ -331,10 +336,10 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
 
   const inputActions = el('div', 'actions');
   inputSection.append(inputActions);
-  const validateButton = createButton(inputActions, text('validateJson'), {
+  const validateButton = createButton(inputActions, `${svg('check-circle')} ${text('validateJson')}`, {
     className: 'secondary',
   });
-  const encodeButton = createButton(inputActions, text('encodeToChmed'));
+  const encodeButton = createButton(inputActions, `${svg('arrow-right-circle')} ${text('encodeToChmed')}`);
 
   const findings = createFindingsView(container, text('validationHeading'));
 
@@ -354,15 +359,15 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
 
   const outputActions = el('div', 'actions');
   outputSection.append(outputActions);
-  const copyButton = createButton(outputActions, text('copy'), {
+  const copyButton = createButton(outputActions, `${svg('copy')} ${text('copy')}`, {
     className: 'secondary',
     accessibleName: text('copyChmedAccessibleName'),
   });
-  const downloadButton = createButton(outputActions, text('download'), {
+  const downloadButton = createButton(outputActions, `${svg('download')} ${text('download')}`, {
     className: 'secondary',
     accessibleName: text('downloadChmedAccessibleName'),
   });
-  const pngButton = createButton(outputActions, text('downloadPng'), {
+  const pngButton = createButton(outputActions, `${svg('image-down')} ${text('downloadPng')}`, {
     className: 'secondary',
     accessibleName: text('downloadPngAccessibleName'),
   });

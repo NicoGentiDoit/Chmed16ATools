@@ -87,6 +87,18 @@ export const STRINGS = {
   jsonOutputHint: 'Read-only, pretty-printed JSON.',
   copyJsonAccessibleName: 'Copy decoded JSON document',
   downloadJsonAccessibleName: 'Download decoded JSON document as a .json file',
+
+  /* ── icon accessible names (for aria-label on button wrappers) ── */
+  iconCheckLabel: 'Success',
+  iconAlertLabel: 'Warning',
+  iconXLabel: 'Error',
+  iconEyeLabel: 'Show',
+  iconEyeOffLabel: 'Hide',
+  iconDownloadLabel: 'Download',
+  iconCopyLabel: 'Copy',
+  iconCameraLabel: 'Camera',
+  iconUploadLabel: 'Upload file',
+  iconQrLabel: 'QR code',
 } as const;
 
 /** Every key of {@link STRINGS}; panels may only request these. */

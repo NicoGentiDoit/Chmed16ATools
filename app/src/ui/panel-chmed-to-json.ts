@@ -19,6 +19,11 @@ import {
 import type { ValidationError, ValidationWarning } from '../core/validate';
 import { text } from './strings';
 
+/** Lucide icon name → inline SVG string. */
+function svg(name: string): string {
+  return `<i data-lucide="${name}" aria-hidden="true" style="width:1em;height:1em;vertical-align:-0.125em"></i>`;
+}
+
 /** A finding flattened for rendering. */
 interface Finding {
   readonly path: string;
@@ -270,7 +275,7 @@ export function mountChmedToJson(container: HTMLElement): Panel {
 
   const decodeActions = el('div', 'actions');
   inputSection.append(decodeActions);
-  const decodeButton = createButton(decodeActions, text('decodeToJson'));
+  const decodeButton = createButton(decodeActions, `${svg('arrow-left-circle')} ${text('decodeToJson')}`);
 
   const scanSection = el('section', 'panel-section');
   const scanHeading = el('h3');
@@ -281,7 +286,7 @@ export function mountChmedToJson(container: HTMLElement): Panel {
   const fileField = el('div', 'field');
   const fileLabel = el('label', 'field-label');
   fileLabel.htmlFor = FILE_INPUT_ID;
-  fileLabel.textContent = text('scanFileLabel');
+  fileLabel.textContent = `${svg('upload')} ${text('scanFileLabel')}`;
 
   const fileInput = el('input', 'field-input');
   fileInput.type = 'file';
@@ -297,7 +302,7 @@ export function mountChmedToJson(container: HTMLElement): Panel {
   scanSection.append(fileField);
 
   const cameraRow = el('div', 'actions');
-  const cameraButton = createButton(cameraRow, text('cameraStart'), { className: 'secondary' });
+  const cameraButton = createButton(cameraRow, `${svg('video')} ${text('cameraStart')}`, { className: 'secondary' });
   const cameraHint = el('p', 'field-hint');
   cameraHint.id = CAMERA_HINT_ID;
   cameraHint.textContent = text('cameraPermissionHint');
@@ -333,11 +338,11 @@ export function mountChmedToJson(container: HTMLElement): Panel {
 
   const outputActions = el('div', 'actions');
   outputSection.append(outputActions);
-  const copyButton = createButton(outputActions, text('copy'), {
+  const copyButton = createButton(outputActions, `${svg('copy')} ${text('copy')}`, {
     className: 'secondary',
     accessibleName: text('copyJsonAccessibleName'),
   });
-  const downloadButton = createButton(outputActions, text('download'), {
+  const downloadButton = createButton(outputActions, `${svg('download')} ${text('download')}`, {
     className: 'secondary',
     accessibleName: text('downloadJsonAccessibleName'),
   });

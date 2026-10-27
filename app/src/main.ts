@@ -20,6 +20,16 @@ function setText(id: string, value: string): void {
   byId(id).textContent = value;
 }
 
+function refreshIcons(): void {
+  // lucide is available globally after the deferred script loads.
+  const fn = (window as unknown as Record<string, unknown>).lucide as
+    | { createIcons: () => void }
+    | undefined;
+  if (typeof fn?.createIcons === 'function') {
+    fn.createIcons();
+  }
+}
+
 document.title = text('appTitle');
 setText('app-title', text('appTitle'));
 setText('app-description', text('appDescription'));
@@ -33,6 +43,8 @@ const chmedToJsonPanel = byId('panel-chmed-to-json');
 const jsonToChmed = mountJsonToChmed(jsonToChmedPanel);
 const chmedToJson = mountChmedToJson(chmedToJsonPanel);
 
+refreshIcons();
+
 createTabs({
   tablist,
   label: text('tablistLabel'),
@@ -41,6 +53,7 @@ createTabs({
     { id: TAB_CHMED_TO_JSON, label: text('tabChmedToJson'), panel: chmedToJsonPanel },
   ],
   onSelect: (id) => {
+    refreshIcons();
     if (id === TAB_JSON_TO_CHMED) {
       chmedToJson.dispose();
     } else {

@@ -71,6 +71,16 @@ const EXPECTED_KEYS = [
   'jsonOutputHint',
   'copyJsonAccessibleName',
   'downloadJsonAccessibleName',
+  'iconCheckLabel',
+  'iconAlertLabel',
+  'iconXLabel',
+  'iconEyeLabel',
+  'iconEyeOffLabel',
+  'iconDownloadLabel',
+  'iconCopyLabel',
+  'iconCameraLabel',
+  'iconUploadLabel',
+  'iconQrLabel',
 ] as const;
 
 describe('UI strings', () => {

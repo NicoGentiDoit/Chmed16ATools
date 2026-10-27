@@ -1,245 +1,450 @@
 /*
- * CHMED16A tools — small hand-written stylesheet.
+ * CHMED16A Tools — Swiss minimalism stylesheet.
  *
- * No framework and no build step of its own: Vite inlines this into the bundle.
- * Errors use red, warnings amber, and every one of them also carries a textual
- * count, so colour is never the only signal.
+ * Design principles:
+ *   • Flat, purposeful surfaces; no gradients or glow.
+ *   • Strong typographic hierarchy via size / weight, not colour alone.
+ *   • Success / error / warning always paired with an icon and text label so
+ *     colour-blind users can distinguish every state.
+ *   • Visible focus rings; respects prefers-reduced-motion.
+ *   • Light mode first; dark mode via prefers-color-scheme.
+ *
+ * No framework. Vite inlines this into the bundle.
  */
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   Design tokens — light mode (default)
+   ───────────────────────────────────────────────────────────────────────────── */
+
 :root {
-  color-scheme: light;
-  --color-text: #1c1c1c;
-  --color-muted: #4a4a4a;
-  --color-border: #c9c9c9;
+  /* ── colours ─────────────────────────────────────────────────────────────── */
+  --color-primary: #0f4c81;
+  --color-on-primary: #ffffff;
+  --color-text: #1a1a1a;
+  --color-text-muted: #4a5568;
+  --color-border: #cbd5e1;
+  --color-border-subtle: #e2e8f0;
   --color-bg: #ffffff;
-  --color-surface: #f5f7f9;
-  --color-accent: #0b5394;
+  --color-surface: #f7fafc;
+  --color-elevation: #ffffff;
+
+  --color-accent: var(--color-primary);
+
+  /* semantic feedback — each has a background variant for double-coding */
+  --color-success: #1a7f37;
+  --color-success-bg: #eaf7ee;
+  --color-warning: #915f00;
+  --color-warning-bg: #fff4d6;
   --color-error: #b71c1c;
   --color-error-bg: #fdecea;
-  --color-warning: #8a5300;
-  --color-warning-bg: #fff4e0;
-  --color-success: #1b5e20;
-  --radius: 6px;
+
+  --color-ring: #1565c0;
+  --color-qr-bg: #ffffff;
+  --color-qr-module: #000000;
+  --color-camera-bg: #000000;
+
+  /* ── spacing (4pt grid) ──────────────────────────────────────────────────── */
+  --space-xs: 0.25rem;   /* 4px  */
+  --space-sm: 0.5rem;    /* 8px  */
+  --space-md: 1rem;      /* 16px */
+  --space-lg: 1.5rem;    /* 24px */
+  --space-xl: 2rem;      /* 32px */
+  --space-2xl: 3rem;     /* 48px */
+
+  /* ── radius ──────────────────────────────────────────────────────────────── */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  /* ── shadow ──────────────────────────────────────────────────────────────── */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.10);
+
+  /* ── type ────────────────────────────────────────────────────────────────── */
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-* {
+/* ─────────────────────────────────────────────────────────────────────────────
+   Dark mode
+   ───────────────────────────────────────────────────────────────────────────── */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-text: #e6edf3;
+    --color-text-muted: #8b949e;
+    --color-border: #30363d;
+    --color-border-subtle: #21262d;
+    --color-bg: #0d1117;
+    --color-surface: #161b22;
+    --color-elevation: #1c2128;
+
+    --color-accent: #5b9bd5;
+
+    --color-success: #3fb950;
+    --color-success-bg: #0d2818;
+    --color-warning: #d29922;
+    --color-warning-bg: #2a1e00;
+    --color-error: #ff6b6b;
+    --color-error-bg: #2a0a0a;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Reset & base
+   ───────────────────────────────────────────────────────────────────────────── */
+
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
-[hidden] {
-  display: none !important;
+html {
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
 }
 
 body {
   margin: 0;
   background: var(--color-bg);
   color: var(--color-text);
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
   line-height: 1.5;
 }
+
+/* Reduce motion for users who prefer it */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   App shell
+   ───────────────────────────────────────────────────────────────────────────── */
 
 .app {
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
-  max-width: 60rem;
+  gap: var(--space-xl);
+  max-width: 48rem;
   min-height: 100vh;
   margin: 0 auto;
-  padding: 1.5rem 1rem 2.5rem;
+  padding: var(--space-xl) var(--space-md) var(--space-2xl);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Header
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.app-header {
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: var(--space-lg);
 }
 
 .app-header h1 {
-  margin: 0 0 0.25rem;
-  font-size: 1.6rem;
+  margin: 0 0 var(--space-xs);
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--color-text);
+}
+
+.app-header h1::before {
+  /* small blue square accent, Swiss-grid style */
+  content: '';
+  display: inline-block;
+  width: 0.35em;
+  height: 0.35em;
+  background: var(--color-primary);
+  border-radius: var(--radius-sm);
+  vertical-align: middle;
+  margin-right: 0.4em;
 }
 
 .app-description {
-  margin: 0 0 0.5rem;
-  color: var(--color-muted);
+  margin: 0 0 var(--space-sm);
+  color: var(--color-text-muted);
+  font-size: 0.9375rem;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Notice / Disclaimer
+   ───────────────────────────────────────────────────────────────────────────── */
 
 .notice {
   margin: 0;
-  padding: 0.6rem 0.75rem;
-  border-left: 4px solid var(--color-accent);
-  border-radius: var(--radius);
+  padding: var(--space-sm) var(--space-md);
+  border-left: 3px solid var(--color-primary);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   background: var(--color-surface);
-  font-size: 0.9rem;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  line-height: 1.55;
 }
 
 .notice-inline {
   border-left-color: var(--color-warning);
   background: var(--color-warning-bg);
+  color: var(--color-warning);
+  font-weight: 500;
 }
 
-.app-footer {
-  margin-top: auto;
-}
+/* ─────────────────────────────────────────────────────────────────────────────
+   Tabs
+   ───────────────────────────────────────────────────────────────────────────── */
 
-/* Tabs ------------------------------------------------------------------ */
+.app-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
 
 .tablist {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
-  padding-bottom: 0.25rem;
+  gap: var(--space-xs);
+  padding-bottom: 0;
   border-bottom: 2px solid var(--color-border);
 }
 
 .tab {
-  padding: 0.55rem 0.9rem;
-  border: 1px solid var(--color-border);
-  border-bottom: none;
-  border-radius: var(--radius) var(--radius) 0 0;
-  background: var(--color-surface);
-  color: var(--color-text);
+  padding: 0.625rem 1.125rem;
+  border: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  background: transparent;
+  color: var(--color-text-muted);
   font: inherit;
+  font-weight: 500;
+  font-size: 0.9375rem;
   cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
 }
 
 .tab:hover {
-  background: #e8eef5;
+  color: var(--color-text);
+  background: var(--color-surface);
 }
 
 .tab[aria-selected='true'] {
   border-color: var(--color-accent);
-  background: var(--color-accent);
-  color: #ffffff;
+  border-bottom-color: var(--color-bg);
+  color: var(--color-accent);
   font-weight: 600;
+  background: var(--color-bg);
+  margin-bottom: -2px; /* bridge the gap under the bottom border */
 }
 
-.tabpanel {
-  padding-top: 1rem;
+.tab:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: -2px;
+}
+
+.tabpanels {
+  padding-top: var(--space-lg);
 }
 
 .tabpanel h2 {
-  margin: 0 0 1rem;
-  font-size: 1.3rem;
+  margin: 0 0 var(--space-lg);
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
 }
 
+.tabpanel:focus-visible {
+  outline: none;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Panel sections
+   ───────────────────────────────────────────────────────────────────────────── */
+
 .panel-section {
-  margin: 0 0 1.75rem;
+  margin: 0 0 var(--space-xl);
+}
+
+.panel-section:last-child {
+  margin-bottom: 0;
 }
 
 .panel-section h3 {
-  margin: 0 0 0.5rem;
-  font-size: 1.05rem;
+  margin: 0 0 var(--space-sm);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
 }
 
-/* Form fields ----------------------------------------------------------- */
+/* ─────────────────────────────────────────────────────────────────────────────
+   Form fields
+   ───────────────────────────────────────────────────────────────────────────── */
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
-  margin-bottom: 0.9rem;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-md);
 }
 
 .field-label {
   font-weight: 600;
+  font-size: 0.9375rem;
+  color: var(--color-text);
 }
 
 .field-input,
 .field-select {
-  /* `font: inherit` keeps the control text at body size on every browser. */
   font: inherit;
-  padding: 0.5rem 0.6rem;
+  padding: 0.625rem 0.75rem;
   border: 1px solid var(--color-border);
-  border-radius: var(--radius);
-  background: #ffffff;
+  border-radius: var(--radius-md);
+  background: var(--color-bg);
   color: inherit;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
 .field-input {
   font-family: var(--font-mono);
-  font-size: 0.9rem;
+  font-size: 0.8125rem;
   resize: vertical;
+  line-height: 1.6;
 }
 
 .field-input[readonly] {
   background: var(--color-surface);
+  color: var(--color-text-muted);
+}
+
+.field-input:focus-visible,
+.field-select:focus-visible {
+  outline: none;
+  border-color: var(--color-ring);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-ring) 22%, transparent);
 }
 
 .field-hint {
   margin: 0;
-  color: var(--color-muted);
-  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
 }
 
 .field-inline {
   flex-direction: row;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-sm);
 }
 
 .field-inline .field-hint {
   flex-basis: 100%;
 }
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   Buttons
+   ───────────────────────────────────────────────────────────────────────────── */
+
 .actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-bottom: 1rem;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
 }
 
 button {
-  padding: 0.5rem 0.9rem;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 0.5625rem 1rem;
   border: 1px solid var(--color-accent);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   background: var(--color-accent);
-  color: #ffffff;
+  color: var(--color-on-primary);
   font: inherit;
+  font-weight: 600;
+  font-size: 0.875rem;
   cursor: pointer;
-}
-
-button.secondary {
-  background: #ffffff;
-  color: var(--color-accent);
-}
-
-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  transition: background 150ms ease, filter 150ms ease, transform 100ms ease;
+  min-height: 2.75rem; /* ≥ 44px touch target */
+  min-width: 2.75rem;
 }
 
 button:hover:not(:disabled) {
-  filter: brightness(1.08);
+  filter: brightness(1.1);
 }
 
-button:focus-visible,
-.field-input:focus-visible,
-.field-select:focus-visible,
-.tab:focus-visible,
-.tabpanel:focus-visible {
-  outline: 3px solid #1565c0;
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--color-ring);
   outline-offset: 2px;
 }
 
-/* Findings -------------------------------------------------------------- */
+button.secondary {
+  background: transparent;
+  color: var(--color-accent);
+}
+
+button.secondary:hover:not(:disabled) {
+  background: var(--color-surface);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Findings / validation results
+   ───────────────────────────────────────────────────────────────────────────── */
 
 .findings {
-  padding: 0.75rem;
+  padding: var(--space-md);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
 }
 
 .findings-summary {
-  margin: 0 0 0.5rem;
+  margin: 0 0 var(--space-sm);
   font-weight: 600;
+  font-size: 0.875rem;
+  color: var(--color-text);
 }
 
 .findings-ok {
   margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
   color: var(--color-success);
   font-weight: 600;
+  font-size: 0.9375rem;
 }
 
 .findings-heading {
-  margin: 0.75rem 0 0.25rem;
-  font-size: 0.95rem;
+  margin: var(--space-md) 0 var(--space-xs);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .findings-heading.is-error {
@@ -252,9 +457,12 @@ button:focus-visible,
 
 .findings-list {
   margin: 0;
-  padding: 0.5rem 0.5rem 0.5rem 1.5rem;
-  border-left: 4px solid;
-  border-radius: var(--radius);
+  padding: var(--space-sm) var(--space-sm) var(--space-sm) 1.75rem;
+  border-left: 3px solid;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--color-surface);
+  font-size: 0.875rem;
+  line-height: 1.6;
 }
 
 .findings-list.is-error {
@@ -269,61 +477,84 @@ button:focus-visible,
   color: var(--color-warning);
 }
 
+.findings-list.is-success {
+  border-color: var(--color-success);
+  background: var(--color-success-bg);
+  color: var(--color-success);
+}
+
 .finding-path {
   font-family: var(--font-mono);
-  font-size: 0.85rem;
+  font-size: 0.8125rem;
+  opacity: 0.85;
 }
 
 .copy-status {
   min-height: 1.2em;
-  margin: 0.35rem 0 0;
-  color: var(--color-muted);
-  font-size: 0.85rem;
+  margin: var(--space-sm) 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
 }
 
-/* QR code --------------------------------------------------------------- */
+/* ─────────────────────────────────────────────────────────────────────────────
+   QR code card
+   ───────────────────────────────────────────────────────────────────────────── */
 
 .qr-preview {
   display: flex;
   justify-content: center;
-  padding: 0.5rem;
+  padding: var(--space-lg);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-elevation);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: var(--space-sm);
 }
 
 .qr-preview svg {
-  width: min(100%, 18rem);
+  width: min(100%, 16rem);
   height: auto;
-  background: #ffffff;
+  background: var(--color-qr-bg);
+  display: block;
 }
 
 .qr-status {
-  margin: 0.35rem 0;
+  margin: var(--space-xs) 0;
+  font-size: 0.875rem;
 }
 
 .qr-status.is-error {
   color: var(--color-error);
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
 }
 
 .qr-info {
-  margin: 0.25rem 0 0;
-  color: var(--color-muted);
+  margin: var(--space-xs) 0 0;
+  color: var(--color-text-muted);
   font-family: var(--font-mono);
-  font-size: 0.85rem;
+  font-size: 0.8125rem;
 }
 
-/* Camera ---------------------------------------------------------------- */
+/* ─────────────────────────────────────────────────────────────────────────────
+   Camera
+   ───────────────────────────────────────────────────────────────────────────── */
 
 .camera-video {
   display: block;
   width: 100%;
   max-width: 32rem;
-  margin-top: 0.5rem;
-  border-radius: var(--radius);
-  background: #000000;
+  margin-top: var(--space-sm);
+  border-radius: var(--radius-lg);
+  background: var(--color-camera-bg);
+  border: 1px solid var(--color-border);
 }
 
 .scan-status {
-  margin: 0.5rem 0 0;
+  margin: var(--space-sm) 0 0;
+  font-size: 0.875rem;
 }
 
 .scan-status.is-error {
@@ -334,4 +565,60 @@ button:focus-visible,
 .scan-status.is-warning {
   color: var(--color-warning);
   font-weight: 600;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Footer / disclaimer
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.app-footer {
+  margin-top: auto;
+  padding-top: var(--space-lg);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Responsive breakpoints
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* 375px – small phone */
+@media (max-width: 374px) {
+  .app {
+    padding: var(--space-md) var(--space-sm) var(--space-xl);
+    gap: var(--space-lg);
+  }
+  .tab {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8125rem;
+  }
+  .app-header h1 {
+    font-size: 1.25rem;
+  }
+}
+
+/* 768px – tablet */
+@media (min-width: 768px) {
+  .app {
+    padding: var(--space-2xl) var(--space-lg) var(--space-2xl);
+  }
+  .app-header h1 {
+    font-size: 1.75rem;
+  }
+  .tab {
+    padding: 0.75rem 1.25rem;
+  }
+}
+
+/* 1024px – small desktop */
+@media (min-width: 1024px) {
+  .app {
+    max-width: 52rem;
+  }
+}
+
+/* 1440px – large desktop */
+@media (min-width: 1440px) {
+  .app {
+    max-width: 56rem;
+  }
 }
