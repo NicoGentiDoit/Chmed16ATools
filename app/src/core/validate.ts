@@ -62,6 +62,11 @@ export interface ValidationResult {
   warnings: ValidationWarning[];
 }
 
+/** Result of parsing JSON text: the value, or one blocking `json-syntax` error. */
+export type JsonParseResult =
+  | { ok: true; value: unknown }
+  | { ok: false; error: ValidationError };
+
 /* -------------------------------------------------------------------------- */
 /* Ajv setup                                                                  */
 /* -------------------------------------------------------------------------- */
@@ -99,6 +104,21 @@ function toValidationError(error: ErrorObject): ValidationError {
 /* -------------------------------------------------------------------------- */
 
 /**
+ * Parses JSON text, reporting a syntax error as a blocking `json-syntax`
+ * finding with 1-based `params.line` / `params.column`.
+ *
+ * This is the single source of truth for JSON line/column reporting: the
+ * validator and the CHMED decoder both use it.
+ */
+export function parseJsonText(text: string): JsonParseResult {
+  try {
+    return { ok: true, value: JSON.parse(text) };
+  } catch (error) {
+    return { ok: false, error: jsonSyntaxError(text, error) };
+  }
+}
+
+/**
  * Parses and validates a JSON document.
  *
  * A JSON syntax error is reported as the single blocking error with keyword
@@ -110,17 +130,11 @@ function toValidationError(error: ErrorObject): ValidationError {
  * reported.
  */
 export function validateJsonText(text: string): ValidationResult {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (error) {
-    return {
-      ok: false,
-      errors: [jsonSyntaxError(text, error)],
-      warnings: [],
-    };
+  const parsed = parseJsonText(text);
+  if (!parsed.ok) {
+    return { ok: false, errors: [parsed.error], warnings: [] };
   }
-  return validateObject(parsed);
+  return validateObject(parsed.value);
 }
 
 /**
