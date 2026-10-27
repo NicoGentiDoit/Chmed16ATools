@@ -1,0 +1,44 @@
+name: ci
+
+on:
+  push:
+    paths:
+      - 'app/**'
+      - '.github/workflows/**'
+  pull_request:
+    paths:
+      - 'app/**'
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+
+jobs:
+  lint-test-build:
+    name: lint, test and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
