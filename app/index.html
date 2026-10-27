@@ -6,7 +6,31 @@
     <title>CHMED16A Tools</title>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app" class="app">
+      <header class="app-header">
+        <h1 id="app-title"></h1>
+        <p id="app-description" class="app-description"></p>
+        <p id="app-tagline" class="notice notice-inline" role="note"></p>
+      </header>
+
+      <div class="app-tabs">
+        <div id="tablist" class="tablist" role="tablist"></div>
+        <main class="tabpanels">
+          <section id="panel-json-to-chmed" class="tabpanel" role="tabpanel" tabindex="0"></section>
+          <section
+            id="panel-chmed-to-json"
+            class="tabpanel"
+            role="tabpanel"
+            tabindex="0"
+            hidden
+          ></section>
+        </main>
+      </div>
+
+      <footer class="app-footer">
+        <p id="app-disclaimer" class="notice" role="note"></p>
+      </footer>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
