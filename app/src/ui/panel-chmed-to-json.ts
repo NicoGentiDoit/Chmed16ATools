@@ -21,7 +21,31 @@ import { text } from './strings';
 
 /** Lucide icon name → inline SVG string. */
 function svg(name: string): string {
-  return `<i data-lucide="${name}" aria-hidden="true" style="width:1em;height:1em;vertical-align:-0.125em"></i>`;
+  return `<i data-lucide="${name}" aria-hidden="true" style="width:1em;height:1em;vertical-align:-0.125em;flex-shrink:0"></i>`;
+}
+
+/**
+ * createButton variant that accepts an optional icon name.
+ *
+ * The icon must be injected via `innerHTML` (so Lucide can replace it with an
+ * SVG); only the visible text part is set through textContent so unknown
+ * characters are never escaped twice.
+ */
+function createButtonWithIcon(
+  parent: HTMLElement,
+  labelText: string,
+  iconName: string,
+  options: ButtonOptions = {},
+): HTMLButtonElement {
+  const button = el('button', options.className);
+  button.type = 'button';
+  button.setAttribute('aria-label', options.accessibleName ?? labelText);
+  // Insert icon markup first so Lucide can find it.
+  button.insertAdjacentHTML('afterbegin', svg(iconName));
+  // Then set the text node — textContent never touches existing children.
+  button.appendChild(document.createTextNode(` ${labelText}`));
+  parent.append(button);
+  return button;
 }
 
 /** A finding flattened for rendering. */
@@ -95,21 +119,6 @@ function createTextareaField(parent: HTMLElement, options: TextareaOptions): HTM
 interface ButtonOptions {
   readonly className?: string;
   readonly accessibleName?: string;
-}
-
-function createButton(
-  parent: HTMLElement,
-  labelText: string,
-  options: ButtonOptions = {},
-): HTMLButtonElement {
-  const button = el('button', options.className);
-  button.type = 'button';
-  button.textContent = labelText;
-  if (options.accessibleName !== undefined) {
-    button.setAttribute('aria-label', options.accessibleName);
-  }
-  parent.append(button);
-  return button;
 }
 
 function errorFindings(errors: readonly ValidationError[]): Finding[] {
@@ -275,7 +284,7 @@ export function mountChmedToJson(container: HTMLElement): Panel {
 
   const decodeActions = el('div', 'actions');
   inputSection.append(decodeActions);
-  const decodeButton = createButton(decodeActions, `${svg('arrow-left-circle')} ${text('decodeToJson')}`);
+  const decodeButton = createButtonWithIcon(decodeActions, text('decodeToJson'), 'arrow-left-circle');
 
   const scanSection = el('section', 'panel-section');
   const scanHeading = el('h3');
@@ -286,7 +295,8 @@ export function mountChmedToJson(container: HTMLElement): Panel {
   const fileField = el('div', 'field');
   const fileLabel = el('label', 'field-label');
   fileLabel.htmlFor = FILE_INPUT_ID;
-  fileLabel.textContent = `${svg('upload')} ${text('scanFileLabel')}`;
+  fileLabel.textContent = text('scanFileLabel');
+  fileLabel.insertAdjacentHTML('afterbegin', svg('upload'));
 
   const fileInput = el('input', 'field-input');
   fileInput.type = 'file';
@@ -302,7 +312,7 @@ export function mountChmedToJson(container: HTMLElement): Panel {
   scanSection.append(fileField);
 
   const cameraRow = el('div', 'actions');
-  const cameraButton = createButton(cameraRow, `${svg('video')} ${text('cameraStart')}`, { className: 'secondary' });
+  const cameraButton = createButtonWithIcon(cameraRow, text('cameraStart'), 'video', { className: 'secondary' });
   const cameraHint = el('p', 'field-hint');
   cameraHint.id = CAMERA_HINT_ID;
   cameraHint.textContent = text('cameraPermissionHint');
@@ -338,11 +348,11 @@ export function mountChmedToJson(container: HTMLElement): Panel {
 
   const outputActions = el('div', 'actions');
   outputSection.append(outputActions);
-  const copyButton = createButton(outputActions, `${svg('copy')} ${text('copy')}`, {
+  const copyButton = createButtonWithIcon(outputActions, text('copy'), 'copy', {
     className: 'secondary',
     accessibleName: text('copyJsonAccessibleName'),
   });
-  const downloadButton = createButton(outputActions, `${svg('download')} ${text('download')}`, {
+  const downloadButton = createButtonWithIcon(outputActions, text('download'), 'download', {
     className: 'secondary',
     accessibleName: text('downloadJsonAccessibleName'),
   });
