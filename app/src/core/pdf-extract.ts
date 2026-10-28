@@ -23,6 +23,13 @@
  *   understands (`prescription-parse.ts:343-349`). Narrower gaps become a
  *   single space. Whitespace *inside* an item is collapsed, never invented.
  *
+ * That gap heuristic is lossy on real paper layouts, where the gap depends on
+ * the *content* width and therefore oscillates between one and two spaces.
+ * `tabulateLayout` therefore rebuilds the table from the boxes (x/y bands) and
+ * emits the same ` | ` cell separator deterministically; `extractPdfText` ships
+ * both renderings (`text` and `tabulatedText`) and the Phase 3 pipeline prefers
+ * the tabulated one when it exists.
+ *
  * Pages are joined with `PDF_PAGE_SEPARATOR` (a form feed), which
  * `prescription-parse.ts:329-337` already treats as a page boundary.
  *
@@ -53,6 +60,9 @@
 
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+
+import { columnKeyFor } from './prescription-parse';
+import type { ColumnKey } from './prescription-parse';
 
 /**
  * Structural view of one entry of `TextContent.items`.
@@ -214,6 +224,489 @@ export function hasTextLayer(text: string): boolean {
 }
 
 /* ------------------------------------------------------------------------- *
+ * Geometry-aware table reconstruction (fix round 2)
+ *
+ * Real eMediplan paper layouts (the German HCI sample) have no `|`/tab and no
+ * stable run of 2+ spaces: the gap between two neighbouring cells is a function
+ * of the *content* width, so it alternates between one and two spaces. The
+ * geometry, however, is unambiguous, so `tabulateLayout` rebuilds the table
+ * from the item boxes and emits exactly the separator contract the strict
+ * parser of `prescription-parse.ts` understands: one line per printed row, cells
+ * joined by ` | ` in header order.
+ *
+ * ## Band tolerances (measured, not guessed)
+ *
+ * Measured on `20261027_eMediplan_Beispiel_de.pdf` (A4 landscape, 10 pt text,
+ * y upwards):
+ * - the largest baseline step *inside* one printed row is 9.6 pt — the PANADOL
+ *   row prints its title (y=224.3), the `(#)` placeholder (214.7), the substance
+ *   (206.3) and the wrapped instruction (205.7); the VALIUM row wraps in 4.8 pt
+ *   steps (title 392.4, `i.m./i.v.` 382.8, `Diazepam` 374.4) and the wrapped
+ *   header title `zur` (425.4) sits 4.8 pt above `Nacht` (415.8);
+ * - the smallest gap *between* two printed rows is 22.2 pt — the lowest line of
+ *   the SORTIS row (y=341.4) to the CO-DIOVAN title (y=319.2); the VALIUM row
+ *   to SORTIS is 23.4 pt, the reserve header to PANADOL 22.8 pt.
+ *
+ * `ROW_TOLERANCE` 14 pt therefore sits 4.4 pt above the largest intra-row step
+ * and 8.2 pt below the smallest inter-row gap: one medication row never glues to
+ * the next, and a four-to-five-line medication cell stays one row.
+ * `HEADER_MERGE_GAP` 18 pt is the corresponding bound for a header that a PDF
+ * breaks into separate bands: it still stays below the 22.2 pt inter-row gap and
+ * only ever merges bands that consist of title vocabulary or bare wrap
+ * fragments, so the first body row can never be absorbed.
+ *
+ * Rows *above* the first table (patient/provider block) are emitted per printed
+ * baseline (`PLAIN_LINE_TOLERANCE`) instead of per band: the parser reads them
+ * as `Label: value` lines, so two neighbouring labels must not be glued by a
+ * wide tolerance.
+ *
+ * ## Per-table columns
+ *
+ * Column bands are re-derived from every header row, never from a document-wide
+ * template: the sample drifts by 4-30 pt between table 1 and the
+ * `Reservemedikation` table (`Einheit` 347.9 -> 365.3, `Von` 421.1 -> 404.3,
+ * `Grund` 660.1 -> 690.7). A band spans the midpoint to its neighbour titles,
+ * so a centre-aligned dose cell (offset +10.5 to +13.2 pt from the title's left
+ * edge) lands in the right band by geometry, not by equality.
+ *
+ * Header fragments that carry no title of their own (`zur`, `durch`) are
+ * consumed: `zur` wraps `zur Nacht`, so `Nacht` stays the night column and the
+ * fragment is dropped.
+ *
+ * Pure: no DOM, no pdfjs import, no I/O.
+ * ------------------------------------------------------------------------- */
+
+/** One text item with its resolved device-space origin. */
+interface LayoutGlyph {
+  readonly text: string;
+  readonly x: number;
+  readonly y: number;
+}
+
+/**
+ * Row-clustering tolerance in points (justified above: largest intra-row step
+ * 9.6 pt, smallest inter-row gap 22.2 pt).
+ */
+const ROW_TOLERANCE = 14;
+
+/**
+ * Baseline tolerance of a plain (non-table) line. The patient/provider block is
+ * read as `Label: value`, so neighbouring printed lines stay separate; items of
+ * one printed line share a baseline (measured jitter <= 1.2 pt).
+ */
+const PLAIN_LINE_TOLERANCE = 2;
+
+/**
+ * Max distance at which a wrapped header band is merged (justified above: above
+ * the 14 pt row tolerance, below the 22.2 pt smallest inter-row gap).
+ */
+const HEADER_MERGE_GAP = 18;
+
+/** Max number of physical bands one header may be printed on. */
+const MAX_HEADER_BANDS = 4;
+
+/** Same minimum as `layoutFor` in `prescription-parse.ts`. */
+const MIN_HEADER_TITLES = 4;
+
+/** Defensive bounds for hostile geometry (a page may hold 50 000 items). */
+const MAX_COLUMNS = 24;
+const MAX_ROWS = 5_000;
+
+/** Cell separator written into the tabulated text (the strict parser contract). */
+const TABULATED_CELL_SEPARATOR = ' | ';
+
+/** Bare wrap fragments of a printed title: they carry no column of their own. */
+const WRAP_FRAGMENT_PATTERN = /^(?:zur|durch|by|and|u\.|mit|to|up)$/i;
+
+/** Footer, comment section and generator line end the medication rows. */
+const TABULATION_STOP_PATTERN =
+  /(?:\b(?:seite|page)\s+\d{1,3}\s+(?:von|of)\s+\d{1,3}\b|eMediplan\s+by\b)/i;
+const COMMENT_HEADER_PATTERN = /^(?:comment|comments|bemerkung|kommentar|remark|remarks|footer)\b/i;
+
+/** Printed title of a following table: a marker, not a medication row. */
+const TABLE_TITLE_MARKER_PATTERN = /^(?:reservemedikation|reserve\s+medication)$/i;
+
+export interface TabulateOptions {
+  /** Overrides the documented row tolerance (points). */
+  readonly rowTolerance?: number;
+  readonly maxColumns?: number;
+  readonly maxRows?: number;
+}
+
+export type TabulateErrorCode =
+  | 'no-geometry'
+  | 'no-medication-header'
+  | 'layout-too-complex'
+  | 'text-too-long';
+
+export interface TabulateError {
+  readonly code: TabulateErrorCode;
+  readonly message: string;
+}
+
+/**
+ * Reconstructed page layout.
+ *
+ * - `text` is one line per printed row; medication rows and header rows are
+ *   `| `-separated in header order, every other line is plain reading-order
+ *   text (patient/provider blocks, issue date, ...).
+ * - `medicationTableCount` is the number of header rows consumed (the sample
+ *   prints two: the main table and `Reservemedikation`).
+ * - `medicationRowCount` counts the emitted medication rows (all tables).
+ * - `columnCount` is the width of the last table's column set.
+ */
+export type TabulateResult =
+  | {
+      readonly ok: true;
+      readonly text: string;
+      readonly medicationTableCount: number;
+      readonly medicationRowCount: number;
+      readonly columnCount: number;
+    }
+  | { readonly ok: false; readonly errors: readonly TabulateError[] };
+
+/** Column band of one table, derived from the printed header titles. */
+interface ColumnBand {
+  readonly title: string;
+  /** Inclusive left edge: midpoint to the previous title (else -infinity). */
+  readonly left: number;
+}
+
+/** Header band: the columns plus the title cell of each column. */
+interface HeaderBand {
+  readonly columns: readonly ColumnBand[];
+  readonly endIndex: number;
+}
+
+function tabulateFailure(code: TabulateErrorCode, message: string): TabulateResult {
+  return { ok: false, errors: [{ code, message }] };
+}
+
+/** Text items with a usable box, in a private shape the algorithm can sort. */
+function toGlyphs(items: readonly PdfTextItemLike[]): LayoutGlyph[] {
+  const glyphs: LayoutGlyph[] = [];
+  for (const item of items) {
+    if (glyphs.length >= MAX_PAGE_TEXT_ITEMS) {
+      break;
+    }
+    const text = typeof item.str === 'string' ? item.str.replace(/\s+/gu, ' ').trim() : '';
+    if (text === '') {
+      continue;
+    }
+    const box = readBox(item);
+    if (box === null) {
+      continue;
+    }
+    glyphs.push({ text, x: box.x, y: box.y });
+  }
+  return glyphs;
+}
+
+/** Reading order: top to bottom, then left to right (y grows upwards). */
+function compareGlyphs(left: LayoutGlyph, right: LayoutGlyph): number {
+  return right.y - left.y || left.x - right.x;
+}
+
+/**
+ * Clusters the page into printed rows.
+ *
+ * Bands are chained: an item joins the current row when its baseline is at most
+ * `tolerance` below the previous item's, so a title/dose/wrap sequence stays one
+ * row while a real row change (>= 22.2 pt in the sample) starts a new band.
+ */
+function clusterRows(glyphs: readonly LayoutGlyph[], tolerance: number): LayoutGlyph[][] {
+  const sorted = [...glyphs].sort(compareGlyphs);
+  const rows: LayoutGlyph[][] = [];
+  let current: LayoutGlyph[] = [];
+  let previousY = Number.NaN;
+  for (const glyph of sorted) {
+    if (current.length > 0 && previousY - glyph.y > tolerance) {
+      rows.push(current);
+      current = [];
+    }
+    current.push(glyph);
+    previousY = glyph.y;
+  }
+  if (current.length > 0) {
+    rows.push(current);
+  }
+  return rows;
+}
+
+/**
+ * Columns of one header band, or `undefined` when the band is not a header.
+ *
+ * A band is a header when its items name the `Medication` column and at least
+ * three further titles — the same rule as `layoutFor`. Titles are deduplicated
+ * by key; wrap fragments (`zur`, `durch`) match no key and are consumed.
+ */
+function deriveColumns(
+  glyphs: readonly LayoutGlyph[],
+  maxColumns: number,
+): ColumnBand[] | undefined {
+  const ordered = [...glyphs].sort(compareGlyphs);
+  const seen = new Set<ColumnKey>();
+  const titles: { key: ColumnKey; title: string; x: number }[] = [];
+  for (const glyph of ordered) {
+    const key = columnKeyFor(glyph.text);
+    if (key === undefined || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    titles.push({ key, title: glyph.text, x: glyph.x });
+  }
+  if (!seen.has('medication') || titles.length < MIN_HEADER_TITLES || titles.length > maxColumns) {
+    return undefined;
+  }
+  titles.sort((left, right) => left.x - right.x);
+  return titles.map((title, index) => {
+    const previous = titles[index - 1];
+    return {
+      title: title.title,
+      left: previous === undefined ? Number.NEGATIVE_INFINITY : (previous.x + title.x) / 2,
+    };
+  });
+}
+
+/** True when every token of the band is a title or a bare wrap fragment. */
+function isHeaderFragmentRow(glyphs: readonly LayoutGlyph[]): boolean {
+  for (const glyph of glyphs) {
+    if (columnKeyFor(glyph.text) !== undefined) {
+      continue;
+    }
+    for (const token of glyph.text.split(' ')) {
+      if (token !== '' && !WRAP_FRAGMENT_PATTERN.test(token)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * Reads the header starting at `start`, merging wrapped continuation bands.
+ *
+ * A following band joins the header when it is within `HEADER_MERGE_GAP` and is
+ * either another title band or a bare-fragment band; the columns are re-derived
+ * from the union so a title split across bands keeps its own column.
+ */
+function readHeaderBand(
+  rows: readonly (readonly LayoutGlyph[])[],
+  start: number,
+  maxColumns: number,
+): HeaderBand | undefined {
+  const first = rows[start];
+  if (first === undefined) {
+    return undefined;
+  }
+  let columns = deriveColumns(first, maxColumns);
+  if (columns === undefined) {
+    return undefined;
+  }
+  let glyphs: LayoutGlyph[] = [...first];
+  let endIndex = start;
+  while (endIndex + 1 < rows.length && endIndex + 1 - start < MAX_HEADER_BANDS) {
+    const previous = rows[endIndex];
+    const next = rows[endIndex + 1];
+    if (previous === undefined || next === undefined) {
+      break;
+    }
+    const gap = lowestY(previous) - highestY(next);
+    if (gap > HEADER_MERGE_GAP || gap < 0) {
+      break;
+    }
+    const nextColumns = deriveColumns(next, maxColumns);
+    if (nextColumns === undefined && !isHeaderFragmentRow(next)) {
+      break;
+    }
+    glyphs = [...glyphs, ...next];
+    endIndex += 1;
+    const merged = deriveColumns(glyphs, maxColumns);
+    if (merged !== undefined) {
+      columns = merged;
+    }
+  }
+  return { columns, endIndex };
+}
+
+function lowestY(glyphs: readonly LayoutGlyph[]): number {
+  let minimum = Number.POSITIVE_INFINITY;
+  for (const glyph of glyphs) {
+    minimum = Math.min(minimum, glyph.y);
+  }
+  return minimum;
+}
+
+function highestY(glyphs: readonly LayoutGlyph[]): number {
+  let maximum = Number.NEGATIVE_INFINITY;
+  for (const glyph of glyphs) {
+    maximum = Math.max(maximum, glyph.y);
+  }
+  return maximum;
+}
+
+/** Index of the column whose band contains `x` (bands are contiguous). */
+function columnIndexFor(columns: readonly ColumnBand[], x: number): number {
+  let index = 0;
+  for (let cursor = 0; cursor < columns.length; cursor += 1) {
+    const band = columns[cursor];
+    if (band === undefined || x < band.left) {
+      break;
+    }
+    index = cursor;
+  }
+  return index;
+}
+
+/**
+ * One row → one cell string per column, in header order.
+ *
+ * Several items of the same band and column (a wrapped brand name, the
+ * substance line, a `(#)` placeholder, a wrapped instruction) are joined with a
+ * single space, which is how the strict parser reads a multi-line cell.
+ */
+function cellsForRow(row: readonly LayoutGlyph[], columns: readonly ColumnBand[]): string[] {
+  const cells = columns.map(() => '');
+  for (const glyph of [...row].sort(compareGlyphs)) {
+    const index = columnIndexFor(columns, glyph.x);
+    const previous = cells[index] ?? '';
+    cells[index] = previous === '' ? glyph.text : `${previous} ${glyph.text}`;
+  }
+  return cells;
+}
+
+/** One non-table band as plain reading-order text. */
+function plainRowText(row: readonly LayoutGlyph[]): string {
+  return [...row]
+    .sort(compareGlyphs)
+    .map((glyph) => glyph.text)
+    .join(' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+/**
+ * A non-table band split per printed baseline.
+ *
+ * The wide row tolerance is needed to keep a wrapped medication cell together,
+ * but the patient/provider block is `Label: value` text: two neighbouring labels
+ * must stay two lines, so the band is re-clustered with the narrow plain-line
+ * tolerance.
+ */
+function plainRowLines(row: readonly LayoutGlyph[]): string[] {
+  const lines: string[] = [];
+  for (const subLine of clusterRows(row, PLAIN_LINE_TOLERANCE)) {
+    const text = plainRowText(subLine);
+    if (text !== '') {
+      lines.push(text);
+    }
+  }
+  return lines;
+}
+
+/** True for a band that ends the medication rows (footer / comment section). */
+function isStopRow(text: string): boolean {
+  return COMMENT_HEADER_PATTERN.test(text) || TABULATION_STOP_PATTERN.test(text);
+}
+
+/**
+ * Reconstructs the printed paper layout from text-item geometry.
+ *
+ * Returns `{ ok: false, errors }` when the page has no usable geometry or no
+ * medication header; the caller then keeps the flat `text` of
+ * `normalizeTextItems`, so nothing is lost and no guess is made. Never throws.
+ */
+export function tabulateLayout(
+  items: readonly PdfTextItemLike[],
+  options: TabulateOptions = {},
+): TabulateResult {
+  const rowTolerance = options.rowTolerance ?? ROW_TOLERANCE;
+  const maxColumns = options.maxColumns ?? MAX_COLUMNS;
+  const maxRows = options.maxRows ?? MAX_ROWS;
+
+  const glyphs = toGlyphs(items);
+  if (glyphs.length === 0) {
+    return tabulateFailure(
+      'no-geometry',
+      'The page has no positioned text items; the table layout cannot be reconstructed.',
+    );
+  }
+
+  const rows = clusterRows(glyphs, rowTolerance);
+  if (rows.length > maxRows) {
+    return tabulateFailure(
+      'layout-too-complex',
+      'The page has too many text rows to reconstruct a medication table.',
+    );
+  }
+
+  const lines: string[] = [];
+  let columns: readonly ColumnBand[] | undefined;
+  let medicationTableCount = 0;
+  let medicationRowCount = 0;
+
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index];
+    if (row === undefined) {
+      continue;
+    }
+    const plain = plainRowText(row);
+    if (plain === '') {
+      continue;
+    }
+    if (isStopRow(plain)) {
+      break;
+    }
+
+    const header = readHeaderBand(rows, index, maxColumns);
+    if (header !== undefined) {
+      columns = header.columns;
+      medicationTableCount += 1;
+      lines.push(header.columns.map((column) => column.title).join(TABULATED_CELL_SEPARATOR));
+      index = header.endIndex;
+      continue;
+    }
+
+    if (columns === undefined) {
+      // Everything above the first table (patient and provider blocks, issue
+      // date, document title) stays plain: the parser reads it as header text.
+      for (const text of plainRowLines(row)) {
+        lines.push(text);
+      }
+      continue;
+    }
+
+    if (TABLE_TITLE_MARKER_PATTERN.test(plain)) {
+      // `Reservemedikation`: the title of the following table, not a row.
+      continue;
+    }
+
+    lines.push(cellsForRow(row, columns).join(TABULATED_CELL_SEPARATOR));
+    medicationRowCount += 1;
+  }
+
+  if (medicationTableCount === 0 || columns === undefined) {
+    return tabulateFailure(
+      'no-medication-header',
+      'No printed medication column header ("Medication", "Morning", ...) was found in the page geometry.',
+    );
+  }
+
+  const text = lines.join('\n');
+  if (text.length > MAX_TOTAL_TEXT_LENGTH) {
+    return tabulateFailure('text-too-long', 'The reconstructed table exceeds the text bound.');
+  }
+
+  return {
+    ok: true,
+    text,
+    medicationTableCount,
+    medicationRowCount,
+    columnCount: columns.length,
+  };
+}
+
+/* ------------------------------------------------------------------------- *
  * pdfjs adapter — lazy, DOM/worker dependent, never imported by the tests.
  * ------------------------------------------------------------------------- */
 
@@ -243,6 +736,15 @@ export interface PdfExtractError {
 export interface PdfExtractedText {
   /** Pages joined with `PDF_PAGE_SEPARATOR`, lines in content order. */
   readonly text: string;
+  /**
+   * Geometry-tabulated pages joined with `PDF_PAGE_SEPARATOR` (see
+   * `tabulateLayout`), or `undefined` when no page could be tabulated.
+   *
+   * Always present on the adapter result (an empty string when the geometry
+   * yielded no medication table — the pipeline then keeps `text`); optional in
+   * the type so a caller that only provides a flat text layer stays valid.
+   */
+  readonly tabulatedText?: string;
   readonly pageCount: number;
   /** False when the document has no non-whitespace text layer (scanned PDF). */
   readonly hasTextLayer: boolean;
@@ -337,6 +839,7 @@ export async function extractPdfText(bytes: Uint8Array): Promise<PdfExtractResul
     }
 
     const pages: string[] = [];
+    const tabulatedPages: string[] = [];
     let totalLength = 0;
     for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
       const page = await pdfDocument.getPage(pageNumber);
@@ -346,11 +849,16 @@ export async function extractPdfText(bytes: Uint8Array): Promise<PdfExtractResul
           return fail('pdf-corrupt', TOO_MANY_ITEMS_MESSAGE);
         }
         const pageText = normalizeTextItems(content.items);
-        totalLength += pageText.length + PDF_PAGE_SEPARATOR.length;
+        // Pure, local: a page whose geometry yields no table contributes an
+        // empty tabulated page, so the pipeline keeps the flat text.
+        const tabulated = tabulateLayout(content.items);
+        const pageTabulated = tabulated.ok ? tabulated.text : '';
+        totalLength += pageText.length + pageTabulated.length + PDF_PAGE_SEPARATOR.length;
         if (totalLength > MAX_TOTAL_TEXT_LENGTH) {
           return fail('pdf-corrupt', TOO_MUCH_TEXT_MESSAGE);
         }
         pages.push(pageText);
+        tabulatedPages.push(pageTabulated);
       } finally {
         page.cleanup();
       }
@@ -359,7 +867,12 @@ export async function extractPdfText(bytes: Uint8Array): Promise<PdfExtractResul
     const text = pages.join(PDF_PAGE_SEPARATOR);
     return {
       ok: true,
-      value: { text, pageCount: pdfDocument.numPages, hasTextLayer: hasTextLayer(text) },
+      value: {
+        text,
+        tabulatedText: tabulatedPages.join(PDF_PAGE_SEPARATOR),
+        pageCount: pdfDocument.numPages,
+        hasTextLayer: hasTextLayer(text),
+      },
     };
   } catch (error) {
     return { ok: false, error: classifyPdfError(error) };

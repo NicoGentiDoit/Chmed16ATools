@@ -24,6 +24,7 @@ Three tabs cover the whole workflow:
    the camera, then read, copy or download the pretty-printed JSON.
 3. **PDF → CHMED16A** — upload a printed eMediplan prescription PDF, extract its medication
    block, and get the validated ePrescription JSON, the `CHMED16A1…` string and a QR preview.
+   If validation blocks, the parsed JSON is shown as a draft and no string/QR is produced.
 
 ## Features
 
@@ -43,7 +44,20 @@ Three tabs cover the whole workflow:
 - **Import PDF** — upload a printed eMediplan paper-layout prescription, parse its patient,
   provider and medication columns, then validate, encode and preview the result. The
   prescription is always `MedType` 3 (Rx) at revision 3, with `HcPerson`/`HcOrg` filled from the
-  provider block when the PDF states them.
+  provider block when the PDF states them. Real eMediplan paper layouts are supported: rows and
+  columns are reconstructed from the PDF text-item geometry (per-table column bands), so layouts
+  with oscillating column gaps and the German title vocabulary (`Medikament`, `Morgen`...`Nacht`,
+  `Einheit`, `Von`, `Bis u. mit`, `Anleitung`, `Grund`, `Verordnet durch`, plus the 2023 layout's
+  `Anwendungsinstruktion`, `Anwendungsgrund`) are read too.
+- **Prescriber inference** — when the document-level author block is empty but every medication
+  row prints the same prescriber, that one printed doctor supplies the `HcPerson` name (honorifics
+  and the printed city are dropped). The GLN still has to be printed on the document: revision 3
+  makes `HcPerson.Gln` required, so nothing is ever synthesized. Rows naming two different doctors
+  mean no inference at all — the validation findings then report the missing identity.
+- **Draft mode** — when the extracted prescription does not validate (for example an official
+  sample with no prescriber and no practice data), the parsed JSON is still shown, clearly marked
+  as a draft, together with the blocking findings. The CHMED textarea, its copy/download buttons
+  and the QR code stay empty and disabled: encoding is strictly gated on validation success.
 - **OCR fallback** — PDFs with a text layer are parsed directly, without OCR. Scanned or
   image-only PDFs are recognized in the browser by a bundled tesseract.js worker (English +
   German traineddata), page by page; OCR-derived text is reported with a low-confidence warning
@@ -130,6 +144,14 @@ own GitHub remote — this checkout's `origin` still points at the upstream
   `chmed16a/README.md` (patient/provider blocks and the medication columns) is understood.
   Free-form doctor letters, other generators' layouts and multi-prescription pages are out of
   scope and fail with a parse finding ("no eMediplan prescription was found") instead of a guess.
+- **The author is inferred only when it is unambiguous.** `HcPerson` is taken from the provider
+  block; when that block is unnamed, a single distinct printed prescriber on the medication rows
+  supplies the name, but only if the document also prints a GLN (revision 3 requires
+  `HcPerson.Gln`). Two different printed doctors, or no printed GLN, leave `HcPerson` absent and
+  the validator reports it. `HcOrg` is never inferred: it is only the printed organisation block.
+- **Encoding requires validation.** A prescription that fails `validateObject` is never encoded:
+  the UI shows the rejected JSON as a draft and keeps the CHMED string, its copy/download buttons
+  and the QR code empty, so a draft can never be mistaken for a transmittable document.
 - **PDF work is bounded.** Files larger than 25 MB are refused before they are read, at most 200
   pages are accepted for text extraction, at most 20 pages are rasterized and OCR'd, and the
   accumulated text is capped (2 MiB characters, 50 000 text items per page); larger documents fail

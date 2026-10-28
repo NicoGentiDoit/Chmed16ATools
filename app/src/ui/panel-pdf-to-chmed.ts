@@ -20,6 +20,15 @@
  * failure is a typed `{ ok: false, stage, errors }` — and the byte read is
  * wrapped as well, so no throw can reach a DOM handler.
  *
+ * ## Draft mode
+ *
+ * A validate-stage failure that carries a `draft` (fix round 3) shows the parsed
+ * prescription in the read-only JSON area under a draft heading and a warning
+ * hint; the validation findings stay exactly as they are. Encoding stays gated
+ * on validation: the CHMED textarea, its copy/download controls and the QR code
+ * remain empty/disabled, because `lastChmed` is only ever set from a successful
+ * encoded result.
+ *
  * ## Disposal
  *
  * The pipeline takes no `AbortSignal` (Phase 3), so `dispose()` cannot cancel an
@@ -36,7 +45,6 @@ import { pdfToPrescription } from '../core/pdf-to-prescription';
 import type {
   PdfToPrescriptionFailure,
   PdfToPrescriptionResult,
-  PdfToPrescriptionStage,
   PdfToPrescriptionSuccess,
   PdfToPrescriptionWarning,
 } from '../core/pdf-to-prescription';
@@ -178,14 +186,21 @@ function failureFindings(failure: PdfToPrescriptionFailure): Finding[] {
   }
 }
 
-function stageMessage(stage: PdfToPrescriptionStage): string {
-  switch (stage) {
+function stageMessage(failure: PdfToPrescriptionFailure): string {
+  switch (failure.stage) {
     case 'extract':
       return text('pdfStageExtract');
     case 'ocr':
       return text('pdfStageOcr');
     case 'parse':
-      return text('pdfStageParse');
+      // The parse stage owns two different outcomes: an unrecognized layout
+      // (nothing that looks like a printed eMediplan table) and a recognized
+      // table whose printed values could not be read (a typed `invalid-value`
+      // or `missing-field`). Only the first deserves the "no prescription"
+      // wording; the second must stay truthful about what was found.
+      return failure.errors.some((error) => error.code === 'unsupported-layout')
+        ? text('pdfStageParse')
+        : text('pdfStageParseValues');
     case 'validate':
       return text('pdfStageValidate');
     case 'encode':
@@ -400,6 +415,16 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
   jsonSection.append(jsonHeading);
   container.append(jsonSection);
 
+  /**
+   * Draft banner. Shown only when a validate-stage failure carries a parsed
+   * prescription: it explains that the JSON below is a draft and that the
+   * blocking findings must be fixed before anything is encoded.
+   */
+  const draftHint = el('p', 'field-hint');
+  draftHint.textContent = text('pdfDraftHint');
+  draftHint.hidden = true;
+  jsonSection.append(draftHint);
+
   const jsonOutput = createTextareaField(jsonSection, {
     id: JSON_OUTPUT_ID,
     label: text('pdfJsonOutputLabel'),
@@ -565,14 +590,35 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
     chmedDownloadButton.disabled = true;
     jsonStatus.textContent = '';
     chmedStatus.textContent = '';
+    setDraftMode(false);
     renderQr();
+  }
+
+  /**
+   * Marks the JSON area as a draft (or back to the normal heading). Encoding
+   * controls are untouched here: `clearOutput()` already disabled them, so a
+   * draft can never reach the CHMED textarea, the clipboard or the QR code.
+   */
+  function setDraftMode(active: boolean): void {
+    jsonHeading.textContent = active ? text('pdfDraftHeading') : text('pdfJsonOutputHeading');
+    draftHint.hidden = !active;
   }
 
   function applyResult(result: PdfToPrescriptionResult): void {
     if (!result.ok) {
       findings.render(failureFindings(result), []);
-      setStatus(stageMessage(result.stage), 'is-error');
       clearOutput();
+      if (result.stage === 'validate' && result.draft !== undefined) {
+        // The parsed prescription is shown for review only: validation failed,
+        // so `lastChmed` stays null and the CHMED/QR outputs stay empty.
+        setDraftMode(true);
+        jsonOutput.value = result.draft.json;
+        jsonCopyButton.disabled = false;
+        jsonDownloadButton.disabled = false;
+        setStatus(text('pdfDraftStatus'), 'is-warning');
+        return;
+      }
+      setStatus(stageMessage(result), 'is-error');
       return;
     }
 

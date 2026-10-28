@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import rawGermanFixture from './fixtures/emediplan-paper-raw-de.txt?raw';
+import realGerman2023Fixture from './fixtures/emediplan-paper-rx-real-de-2023.txt?raw';
+import realGermanOneDoctorFixture from './fixtures/emediplan-paper-rx-real-de-one-doctor.txt?raw';
+import realGermanFixture from './fixtures/emediplan-paper-rx-real-de.txt?raw';
 import minimalFixture from './fixtures/emediplan-paper-rx-minimal.txt?raw';
 import singleMedicamentFixture from './fixtures/emediplan-paper-rx.txt?raw';
 import twoMedicamentsFixture from './fixtures/emediplan-paper-rx-two-meds.txt?raw';
@@ -503,5 +507,525 @@ describe('tolerant single-spaced layout', () => {
     const tolerant = expectSuccess(parsePrescriptionText(collapsed));
 
     expect(tolerant.value.Medicaments).toEqual(strict.value.Medicaments);
+  });
+});
+
+describe('real German eMediplan sample (geometry-tabulated text)', () => {
+  it('parses all five printed medication rows in document order', () => {
+    const { value } = expectSuccess(parsePrescriptionText(realGermanFixture));
+
+    expect(value.Medicaments).toEqual([
+      {
+        Id: 'VALIUM Inj Lös 10 mg/2ml i.m./i.v. Diazepam',
+        IdType: 1,
+        Unit: 'ml',
+        AppInstr: 'nur i.m., nur durch instruierte Personen!',
+        Pos: [{ D: [2, 0, 0, 0] }],
+      },
+      {
+        Id: 'SORTIS Filmtabl 20 mg Atorvastatin',
+        IdType: 1,
+        Unit: 'Milligramm Atorvastatin',
+        Pos: [{ D: [0, 0, 1, 0] }],
+      },
+      {
+        Id: 'CO-DIOVAN Filmtabl 160/12.5 mg Valsartan, Hydrochlorothiazid',
+        IdType: 1,
+        Unit: 'Stück',
+        Pos: [{ D: [1, 0, 0, 0] }],
+      },
+      {
+        Id: 'PANADOL S Filmtabl 500 mg (#) Paracetamol',
+        IdType: 1,
+        Unit: 'Stück',
+        AppInstr: 'bis zu max. 4 mal täglich 1 Tablette einnehmen',
+      },
+      {
+        Id: 'Essigwickel',
+        IdType: 1,
+        AppInstr: 'bei Bedarf',
+      },
+    ]);
+  });
+
+  it('reads the unlabelled patient block and the German issue date', () => {
+    const { value } = expectSuccess(parsePrescriptionText(realGermanFixture));
+
+    expect(value.Patient).toEqual({
+      FName: 'Peter',
+      LName: 'Muster',
+      BDt: '1943-11-01',
+      Gender: 1,
+      Street: '2, Seidenhofstrasse, Altstadt',
+      Zip: '6002',
+      City: 'Luzern',
+    });
+    expect(value.Dt).toBe('2026-10-27');
+    expect(value.rev).toBe(3);
+    expect(value.MedType).toBe(3);
+  });
+
+  it('never promotes the printed "Von" column to DtTo and never emits DtFrom', () => {
+    const { value } = expectSuccess(parsePrescriptionText(realGermanFixture));
+    const serialized = JSON.stringify(value);
+
+    expect(serialized).not.toContain('DtFrom');
+    expect(serialized).not.toContain('DtTo');
+    // The rows carry a printed from-date (03.11.2015, 01.03.2016, 09.09.2016)
+    // but no end date; Rx has no DtFrom, so the value is consumed and dropped.
+    expect(value.Medicaments?.every((medicament) => medicament.Pos === undefined
+      || medicament.Pos[0]?.DtTo === undefined)).toBe(true);
+  });
+
+  it('reports no invalid-value error, only the empty provider GLN warning', () => {
+    const { warnings } = expectSuccess(parsePrescriptionText(realGermanFixture));
+
+    expect(warnings).toEqual([{ code: 'empty-string', path: '/Auth', message: expect.any(String) }]);
+  });
+
+  it('surfaces the missing provider identity instead of inventing one', () => {
+    const { value } = expectSuccess(parsePrescriptionText(realGermanFixture));
+    const validation = validateObject(value, { medType: 3, rev: 3 });
+
+    // The sample prints `erstellt von :` without a value and no GLN anywhere, so
+    // revision 3 cannot be satisfied; the gap is reported, not filled in. The
+    // per-row prescribers name two different doctors, so the fix-round-3
+    // inference is ambiguous and deliberately sets nothing.
+    expect(value.HcPerson).toBeUndefined();
+    expect(value.HcOrg).toBeUndefined();
+    expect(validation.errors.map((error) => error.params)).toEqual([
+      { missingProperty: 'HcPerson' },
+      { missingProperty: 'HcOrg' },
+    ]);
+  });
+
+  it('fails closed on the raw adapter text of the same page', () => {
+    // The flat, unstabilized text (single spaces, split header) must not be
+    // parsed by guesswork: that was exactly the silent-wrong-data failure mode
+    // of the reproduction probe.
+    const result = expectFailure(parsePrescriptionText(rawGermanFixture));
+
+    expect(result.errors[0]?.code).toBe('unsupported-layout');
+  });
+});
+
+describe('2023 German eMediplan sample (fix round 4)', () => {
+  // The fixture is the verbatim output of the real geometry tabulator for
+  // `20230209_eMediplan_Beispiel_de.pdf`: it prints `Anwendungsinstruktion` /
+  // `Anwendungsgrund` instead of `Anleitung` / `Grund`, and every row's cells
+  // are separated because those two titles now own their bands.
+  it('parses all six printed rows, doses, end date and instructions', () => {
+    const { value, warnings } = expectSuccess(
+      parsePrescriptionText(realGerman2023Fixture),
+    );
+
+    expect(value.Dt).toBe('2023-02-09');
+    expect(value.Medicaments).toEqual([
+      {
+        Id: 'ANTIBIOTIKUM Tabl 800/160mg Disulfontetraprim, Monoketozam',
+        IdType: 1,
+        Unit: 'Stk',
+        AppInstr: 'nach dem Essen',
+        Pos: [{ DtTo: '2023-02-19', D: [1, 0, 1, 0] }],
+      },
+      {
+        Id: 'CO-ANTIHYP Filmtabl 160/12.5 mg Balsorten, Hydronatriazid',
+        IdType: 1,
+        Unit: 'Stk',
+        Pos: [{ D: [1, 0, 0, 0] }],
+      },
+      {
+        Id: 'CHOLES Filmtabl 20 mg Otamustitan',
+        IdType: 1,
+        Unit: 'Stk',
+        Pos: [{ D: [0.5, 0, 1, 0] }],
+      },
+      {
+        Id: 'ANTIKRAMPF Inj Lös 10 mg/2ml i.m./i.v. Trifluopam',
+        IdType: 1,
+        Unit: 'ml',
+        AppInstr: 'nur i.m., nur durch instruierte Personen!',
+        Pos: [{ D: [2, 0, 0, 0] }],
+      },
+      {
+        Id: 'Essigwickel',
+        IdType: 1,
+        AppInstr: 'bei Bedarf',
+      },
+      {
+        Id: 'ANTIPYRETIC Filmtabl 500 mg Antipyretic',
+        IdType: 1,
+        AppInstr: 'bis zu max. 4 mal täglich 1 Tablette einnehmen',
+      },
+    ]);
+    expect(warnings).toEqual([{ code: 'empty-string', path: '/Auth', message: expect.any(String) }]);
+  });
+
+  it('never emits DtFrom for the printed "Von" column', () => {
+    const { value } = expectSuccess(parsePrescriptionText(realGerman2023Fixture));
+
+    expect(JSON.stringify(value)).not.toContain('DtFrom');
+    // `ANTIBIOTIKUM` is the only row with a printed end date; `ANTIKRAMPF`
+    // prints a `Von` value but no `Bis u. mit`, so it keeps no `DtTo`.
+    expect(value.Medicaments?.map((medicament) => medicament.Pos?.[0]?.DtTo ?? null)).toEqual([
+      '2023-02-19',
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]);
+  });
+
+  it('stays validate-blocked on the missing provider identity and invents none', () => {
+    const { value } = expectSuccess(parsePrescriptionText(realGerman2023Fixture));
+
+    // No GLN / organisation is printed and four different doctors are named per
+    // row, so the round-3 inference stays deliberately ambiguous.
+    expect(value.HcPerson).toBeUndefined();
+    expect(value.HcOrg).toBeUndefined();
+    expect(validateObject(value, { medType: 3, rev: 3 }).errors.map((error) => error.params)).toEqual([
+      { missingProperty: 'HcPerson' },
+      { missingProperty: 'HcOrg' },
+    ]);
+  });
+});
+
+describe('author inference from the "Prescribed by" column (fix round 3)', () => {
+  const GLN = '7601000123456';
+
+  /** Patient + issue date + an optional provider block + the printed table. */
+  function authorText(providerLines: readonly string[], rows: readonly string[]): string {
+    return [
+      'Patient',
+      'Erika Muster',
+      'Born on: 05.05.1980 (F)',
+      'Issue date: 01.09.2026',
+      ...providerLines,
+      DEFAULT_HEADER,
+      ...rows,
+    ].join('\n');
+  }
+
+  /** One printed row; `prescriber` lands in the `Prescribed by` cell. */
+  function row(prescriber: string): string {
+    return `Ramipril 5 mg | 1 | 0 | 0 | 0 | Tablet | 01.09.2026 | 30.09.2026 | After a meal | Hypertension | ${prescriber} |`;
+  }
+
+  it('infers HcPerson from one consistent prescriber and adds no HcOrg', () => {
+    const { value } = expectSuccess(
+      parsePrescriptionText(
+        authorText([`GLN: ${GLN}`], [row('Dr. med. Anna Muster'), row('Dr. med. Anna Muster')]),
+      ),
+    );
+
+    expect(value.HcPerson).toEqual({ Gln: GLN, FName: 'Anna', LName: 'Muster' });
+    // `HcOrg` is only ever the printed organisation block, never inferred.
+    expect(value.HcOrg).toBeUndefined();
+    expect(value.Auth).toBe(GLN);
+  });
+
+  it('drops the honorific and the printed city line of the cell', () => {
+    const { value } = expectSuccess(
+      parsePrescriptionText(authorText([`GLN: ${GLN}`], [row('Dr. Example Karl, Wängi')])),
+    );
+
+    expect(value.HcPerson).toEqual({ Gln: GLN, FName: 'Example', LName: 'Karl' });
+  });
+
+  it('ignores self-medication markers, empty cells and the printed dash', () => {
+    const { value } = expectSuccess(
+      parsePrescriptionText(
+        authorText(
+          [`GLN: ${GLN}`],
+          [row('Selbstmedikation'), row(''), row('-'), row('Dr. med. Anna Muster')],
+        ),
+      ),
+    );
+
+    expect(value.HcPerson).toEqual({ Gln: GLN, FName: 'Anna', LName: 'Muster' });
+  });
+
+  it('infers nothing when only self-medication rows are printed', () => {
+    const { value } = expectSuccess(
+      parsePrescriptionText(
+        authorText([`GLN: ${GLN}`], [row('Selbstmedikation'), row('Self medication')]),
+      ),
+    );
+
+    expect(value.HcPerson).toBeUndefined();
+  });
+
+  it('drops a self-medication cell whose printed reason is glued to it', () => {
+    // The 2023 layout can glue `Fieber` into the `Verordnet` band cell. The
+    // prefix form of the marker must still name no prescriber, otherwise the
+    // glued text would fake a second author and defeat the inference.
+    const { value } = expectSuccess(
+      parsePrescriptionText(
+        authorText(
+          [`GLN: ${GLN}`],
+          [
+            row('Selbstmedikation Fieber'),
+            row('Dr. med. Anna Muster'),
+            row('Selbstmedikation Schmerzen'),
+          ],
+        ),
+      ),
+    );
+
+    expect(value.HcPerson).toEqual({ Gln: GLN, FName: 'Anna', LName: 'Muster' });
+  });
+
+  it('infers nothing from two distinct prescribers (no error of its own)', () => {
+    const { value, warnings } = expectSuccess(
+      parsePrescriptionText(
+        authorText(
+          [`GLN: ${GLN}`],
+          [row('Dr. med. Anna Muster'), row('Dr. med. Bruno Arzt'), row('Dr. med. Anna Muster')],
+        ),
+      ),
+    );
+
+    // Ambiguity is not a parse error: the validator keeps reporting the missing
+    // required `HcPerson`/`HcOrg` exactly as before the inference existed.
+    expect(value.HcPerson).toBeUndefined();
+    expect(warnings.map((warning) => warning.code)).not.toContain('invalid-value');
+    expect(validateObject(value, { medType: 3, rev: 3 }).errors.map((error) => error.params)).toEqual([
+      { missingProperty: 'HcPerson' },
+      { missingProperty: 'HcOrg' },
+    ]);
+  });
+
+  it('keeps a named provider block as the author', () => {
+    const { value } = expectSuccess(
+      parsePrescriptionText(
+        authorText(
+          ['Created by: Dr. med. Anna Muster', `GLN: ${GLN}`],
+          [row('Dr. med. Bruno Arzt')],
+        ),
+      ),
+    );
+
+    // Document-level authorship wins over the per-row column: inference is
+    // additive and never overrides printed data.
+    expect(value.HcPerson).toEqual({ Gln: GLN, FName: 'Anna', LName: 'Muster' });
+  });
+
+  it('needs a printed GLN, because HcPerson.Gln is required', () => {
+    const { value } = expectSuccess(
+      parsePrescriptionText(authorText([], [row('Dr. med. Anna Muster')])),
+    );
+
+    expect(value.HcPerson).toBeUndefined();
+  });
+
+  it('infers the same author on the tolerant single-spaced path', () => {
+    const spaced = authorText([`GLN: ${GLN}`], [row('Dr. med. Anna Muster'), row('Dr. med. Anna Muster')]);
+    const strict = expectSuccess(parsePrescriptionText(spaced));
+    const tolerant = expectSuccess(parsePrescriptionText(singleSpaced(spaced)));
+
+    expect(tolerant.value.HcPerson).toEqual(strict.value.HcPerson);
+    expect(tolerant.value.HcPerson).toEqual({ Gln: GLN, FName: 'Anna', LName: 'Muster' });
+  });
+
+  it('validates and encodes the real one-doctor sample variant', () => {
+    const { value } = expectSuccess(parsePrescriptionText(realGermanOneDoctorFixture));
+
+    // Derived from the committed real HCI sample: the per-row prescribers are
+    // unified to one doctor and the document-level provider block, left empty in
+    // the template, is filled (synthetic placeholder GLN) because revision 3
+    // requires HcPerson.Gln and HcOrg.
+    expect(value.HcPerson).toEqual({ Gln: '7600000000000', FName: 'Example', LName: 'Karl' });
+    expect(value.HcOrg).toEqual({
+      Name: 'Praxis Dr. Example Karl',
+      Street: 'Hauptstrasse 1',
+      Zip: '8355',
+      City: 'Wängi',
+    });
+    expect(validateObject(value).errors).toEqual([]);
+  });
+});
+
+describe('real-world paper variations', () => {
+  const germanHeader =
+    'Medikament | Morgen | Mittag | Abend | Nacht | Einheit | Von | Bis u. mit | Anleitung | Grund | Verordnet durch';
+
+  /** The 2023 sample titles (`Anwendungsinstruktion` / `Anwendungsgrund`). */
+  const german2023Header =
+    'Medikament | Morgen | Mittag | Abend | Nacht | Einheit | Von | Bis u. mit | Anwendungsinstruktion | Anwendungsgrund | Verordnet durch';
+
+  it('reads the 2023 titles "Anwendungsinstruktion" and "Anwendungsgrund"', () => {
+    const { value } = expectSuccess(
+      parsePrescriptionText(
+        paperText(
+          ['Ibu 400 mg | 1 | - | - | - | Stück | - | - | bei Bedarf | Fieber | Selbstmedikation'],
+          german2023Header,
+        ),
+      ),
+    );
+
+    expect(value.Medicaments?.[0]).toEqual({
+      Id: 'Ibu 400 mg',
+      IdType: 1,
+      Unit: 'Stück',
+      AppInstr: 'bei Bedarf',
+      Pos: [{ D: [1, 0, 0, 0] }],
+    });
+  });
+
+  it('treats "siehe Anwendungsinstruktion" as a cross-reference, not a dose', () => {
+    const result = expectSuccess(
+      parsePrescriptionText(
+        paperText(
+          [
+            'Ibu 400 mg | siehe Anwendungsinstruktion |  |  |  | - |  |  | bei Bedarf | Fieber | Selbstmedikation',
+          ],
+          german2023Header,
+        ),
+      ),
+    );
+
+    expect(result.warnings.map((warning) => warning.code)).toEqual(['empty-string']);
+    expect(result.value.Medicaments?.[0]).toEqual({
+      Id: 'Ibu 400 mg',
+      IdType: 1,
+      AppInstr: 'bei Bedarf',
+    });
+  });
+
+  it('keeps the documented date-prefix tolerance for a glued instruction cell', () => {
+    // Tolerance pinned on purpose (fix round 4): the date is read and the
+    // trailing prose of the same cell is dropped. Once the instruction owns its
+    // own band this only happens for a genuinely glued input.
+    const { value } = expectSuccess(
+      parsePrescriptionText(
+        paperText(
+          [
+            'Ibu 400 mg | 1 | - | - | - | Stk |  | 19.02.2023 nach dem Essen |  |  | Selbstmedikation',
+          ],
+          german2023Header,
+        ),
+      ),
+    );
+
+    const medicament = value.Medicaments?.[0];
+    expect(medicament?.Pos?.[0]?.DtTo).toBe('2023-02-19');
+    expect(medicament?.AppInstr).toBeUndefined();
+  });
+
+  it('reads the German titles "Einheit" and "Anleitung"', () => {
+    const { value } = expectSuccess(
+      parsePrescriptionText(
+        paperText(
+          ['Ibu 400 mg | 1 | - | - | - | Stück | 01.09.2026 | - | bei Bedarf | Fieber | Dr. med. A Muster'],
+          germanHeader,
+        ),
+      ),
+    );
+
+    expect(value.Medicaments?.[0]).toEqual({
+      Id: 'Ibu 400 mg',
+      IdType: 1,
+      Unit: 'Stück',
+      AppInstr: 'bei Bedarf',
+      Pos: [{ D: [1, 0, 0, 0] }],
+    });
+  });
+
+  it('reads "-" as an empty dose cell, an omitted unit and no end date', () => {
+    const { value } = expectSuccess(
+      parsePrescriptionText(
+        paperText(
+          ['Ibu 400 mg | 2 | - | - | – | - | 01.09.2026 | - | | | |'],
+          germanHeader,
+        ),
+      ),
+    );
+
+    expect(value.Medicaments?.[0]).toEqual({
+      Id: 'Ibu 400 mg',
+      IdType: 1,
+      Pos: [{ D: [2, 0, 0, 0] }],
+    });
+  });
+
+  it('keeps "-" rows without a dose vector out of Pos', () => {
+    const { value } = expectSuccess(
+      parsePrescriptionText(
+        paperText(
+          ['Essigwickel | - | - | - | - | - | 09.09.2016 | - | bei Bedarf | Fieber | Selbstmedikation'],
+          germanHeader,
+        ),
+      ),
+    );
+
+    expect(value.Medicaments?.[0]).toEqual({
+      Id: 'Essigwickel',
+      IdType: 1,
+      AppInstr: 'bei Bedarf',
+    });
+  });
+
+  it('appends the reserve table rows and re-derives its column layout', () => {
+    const text = [
+      'Peter Muster',
+      '01.11.1943 (M)',
+      '2, Seidenhofstrasse, Altstadt, 6002 Luzern',
+      'Ausstellungsdatum: 27.10.2026 14:39',
+      'Medikament | Morgen | Mittag | Abend | Nacht | Einheit | Von | Bis u. mit | Anleitung',
+      'Ramipril 5 mg | 1 | - | - | - | Stück | 01.09.2026 | - | morgens',
+      'Reservemedikation',
+      'Medikament | Nacht | Abend | Mittag | Morgen | Einheit | Bis u. mit',
+      'Ibuprofen 400 mg | 2 | - | - | - | Stück | 05.10.2026',
+      'Bemerkung :',
+      'Freitext, der keine Medikamentenzeile ist.',
+      'Peter Muster (01.11.1943)  eMediplan by HCI Solutions AG(V1.0)  Seite 1 von 1',
+    ].join('\n');
+
+    const { value } = expectSuccess(parsePrescriptionText(text));
+
+    expect(value.Medicaments).toEqual([
+      { Id: 'Ramipril 5 mg', IdType: 1, Unit: 'Stück', AppInstr: 'morgens', Pos: [{ D: [1, 0, 0, 0] }] },
+      { Id: 'Ibuprofen 400 mg', IdType: 1, Unit: 'Stück', Pos: [{ DtTo: '2026-10-05', D: [0, 0, 0, 2] }] },
+    ]);
+  });
+
+  it('uses an unlabelled birth line as the compact patient anchor', () => {
+    const text = [
+      'Erika Muster',
+      '05.05.1980 (W)',
+      'Sonnenweg 8, 4059 Basel',
+      'Ausstellungsdatum: 01.09.2026',
+      DEFAULT_HEADER,
+      'Ibu 400 mg | 1 | 0 | 0 | 0 | Tablet | 01.09.2026 | 05.10.2026 | | | |',
+    ].join('\n');
+
+    const { value } = expectSuccess(parsePrescriptionText(text));
+
+    expect(value.Patient).toMatchObject({
+      FName: 'Erika',
+      LName: 'Muster',
+      BDt: '1980-05-05',
+      Gender: 2,
+      Zip: '4059',
+      City: 'Basel',
+    });
+  });
+
+  it('stops at the footer and the comment section', () => {
+    const text = [
+      'Peter Muster',
+      '01.11.1943 (M)',
+      '2, Seidenhofstrasse, Altstadt, 6002 Luzern',
+      'Ausstellungsdatum: 27.10.2026 14:39',
+      germanHeader,
+      'Ramipril 5 mg | 1 | - | - | - | Stück | 01.09.2026 | - | morgens',
+      'Seite 1 von 1',
+      'Ibuprofen 400 mg | 2 | - | - | - | Stück | 01.09.2026 | - | abends',
+    ].join('\n');
+
+    const { value } = expectSuccess(parsePrescriptionText(text));
+
+    expect(value.Medicaments?.map((medicament) => medicament.Id)).toEqual(['Ramipril 5 mg']);
   });
 });

@@ -1,0 +1,22 @@
+erstellt von :
+Praxis: Praxis Dr. Example Karl
+Street: Hauptstrasse 1
+Zip: 8355
+City: Wängi
+GLN: 7600000000000
+Peter Muster
+01.11.1943 (M)
+2, Seidenhofstrasse, Altstadt, 6002 Luzern
+Körpergrösse / Gewicht: 180 cm / 81 kg Der Schweizer Medikationsplan
+Niereninsuffizienz: leicht
+Diabetes: Unbekannt
+Allergie(n): Penicillin-Allergie, z.B. Amoxicillin, Flucloxacillin,
+Piperacillin
+Ausstellungsdatum: 27.10.2026 14:39
+Medikament | Morgen | Mittag | Abend | Nacht | Einheit | Von | Bis u. mit | Anleitung | Grund | Verordnet durch
+VALIUM Inj Lös 10 mg/2ml i.m./i.v. Diazepam | 2 | - | - | - | ml | 03.11.2015 |  | nur i.m., nur durch instruierte Personen! | Beruhigung | Dr. Example Karl, Wängi
+SORTIS Filmtabl 20 mg Atorvastatin | - | - | 1 | - | Milligramm Atorvastatin | 01.03.2016 |  |  | Cholesterinsenker | Dr. Example Karl, Wängi
+CO-DIOVAN Filmtabl 160/12.5 mg Valsartan, Hydrochlorothiazid | 1 | - | - | - | Stück | 01.03.2016 |  |  | Bluthochdruck | Dr. Example Karl, Wängi
+Medikament | Morgen | Mittag | Abend | Nacht | Einheit | Von | Bis u. mit | Anleitung | Grund | Verordnet
+PANADOL S Filmtabl 500 mg (#) Paracetamol | - | - | - | - | Stück | 09.09.2016 |  | bis zu max. 4 mal täglich 1 Tablette einnehmen | Schmerzen | Selbstmedikation
+Essigwickel | - | - | - | - | - | 09.09.2016 |  | bei Bedarf | Fieber | Selbstmedikation

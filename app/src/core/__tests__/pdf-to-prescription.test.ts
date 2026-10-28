@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import realGermanOneDoctorFixture from './fixtures/emediplan-paper-rx-real-de-one-doctor.txt?raw';
+import realGermanFixture from './fixtures/emediplan-paper-rx-real-de.txt?raw';
 import { jsonToChmed } from '../encode';
 import type { PdfExtractError } from '../pdf-extract';
 import { MAX_OCR_PAGES, pdfToPrescription } from '../pdf-to-prescription';
@@ -45,6 +47,12 @@ const OCR_PAPER_TEXT = [
   'Medication Morning (08:00) Noon (12:00) Evening (18:00) Night (22:00) Quantity From Up to and including Instructions Reason Prescribed by Reserve medication',
   'Ramipril 5 mg 1 0 0 0 Tablet 01.09.2026 30.09.2026 After a meal Hypertension Dr. med. Anna Muster',
 ].join('\n');
+
+/**
+ * Geometry-tabulated text of the real German HCI sample: exactly what
+ * `tabulateLayout` produces for its item geometry (see `pdf-extract.test.ts`).
+ */
+const REAL_GERMAN_TEXT = realGermanFixture;
 
 /** Revision-3 Rx that the real validator and encoder accept without findings. */
 const PRESCRIPTION: MedicationRx = {
@@ -324,6 +332,70 @@ describe('typed failures', () => {
     expect(encode).not.toHaveBeenCalled();
   });
 
+  it('carries the rejected prescription as a draft on a validate failure', async () => {
+    const validationErrors = [
+      {
+        instancePath: '',
+        keyword: 'required',
+        message: "must have required property 'HcPerson'",
+        params: { missingProperty: 'HcPerson' },
+      },
+    ];
+
+    const failure = expectFailure(
+      await pdfToPrescription(
+        pdfBytes(),
+        makeDeps({ validate: () => ({ ok: false, errors: validationErrors, warnings: [] }) }),
+      ),
+    );
+    if (failure.stage !== 'validate') {
+      throw new Error(`Expected a validate failure, got "${failure.stage}".`);
+    }
+
+    expect(failure.draft).toEqual({
+      prescription: PRESCRIPTION,
+      json: JSON.stringify(PRESCRIPTION, null, 2),
+    });
+  });
+
+  it('adds no draft to failures of stages without a prescription object', async () => {
+    const parseFailure = expectFailure(
+      await pdfToPrescription(
+        pdfBytes(),
+        makeDeps({
+          parseText: () => ({
+            ok: false,
+            errors: [{ code: 'missing-field', path: '/Patient', message: 'No patient block.' }],
+          }),
+        }),
+      ),
+    );
+    const encodeFailure = expectFailure(
+      await pdfToPrescription(
+        pdfBytes(),
+        makeDeps({
+          encode: () => ({
+            ok: false,
+            errors: [
+              {
+                instancePath: '',
+                keyword: 'minLength',
+                message: 'must NOT have fewer than 1 characters',
+                params: { limit: 1 },
+              },
+            ],
+            warnings: [],
+          }),
+        }),
+      ),
+    );
+
+    expect(parseFailure.stage).toBe('parse');
+    expect(encodeFailure.stage).toBe('encode');
+    expect('draft' in parseFailure).toBe(false);
+    expect('draft' in encodeFailure).toBe(false);
+  });
+
   it('surfaces encoder errors with stage "encode"', async () => {
     const encodeErrors = [
       {
@@ -504,5 +576,149 @@ describe('warnings', () => {
     expect(result.warnings.map((warning) => [warning.code, warning.path])).toEqual([
       ['unknown-field', '/Extra'],
     ]);
+  });
+});
+
+describe('tabulated text selection', () => {
+  it('parses the geometry-tabulated text when the extraction provides it', async () => {
+    const parseText = vi.fn(parsePrescriptionText);
+
+    const result = expectSuccess(
+      await pdfToPrescription(
+        pdfBytes(),
+        makeDeps({
+          extractText: async () => ({
+            ok: true,
+            value: {
+              text: 'flat text that must not be parsed',
+              tabulatedText: REAL_GERMAN_TEXT,
+              pageCount: 1,
+              hasTextLayer: true,
+            },
+          }),
+          parseText,
+          validate: () => ({ ok: true, errors: [], warnings: [] }),
+        }),
+      ),
+    );
+
+    expect(parseText).toHaveBeenCalledWith(REAL_GERMAN_TEXT);
+    expect(result.text).toBe(REAL_GERMAN_TEXT);
+    expect(result.prescription.Patient.FName).toBe('Peter');
+    expect(result.prescription.Medicaments).toHaveLength(5);
+  });
+
+  it('falls back to the flat text when no tabulation was produced', async () => {
+    const parseText = vi.fn(parsePrescriptionText);
+
+    const result = expectSuccess(
+      await pdfToPrescription(
+        pdfBytes(),
+        makeDeps({
+          extractText: async () => ({
+            ok: true,
+            value: { text: PAPER_TEXT, tabulatedText: '', pageCount: 1, hasTextLayer: true },
+          }),
+          parseText,
+          validate: () => ({ ok: true, errors: [], warnings: [] }),
+        }),
+      ),
+    );
+
+    expect(parseText).toHaveBeenCalledWith(PAPER_TEXT);
+    expect(result.text).toBe(PAPER_TEXT);
+  });
+
+  it('keeps the OCR path flat even when a tabulated text is reported', async () => {
+    const result = expectSuccess(
+      await pdfToPrescription(
+        pdfBytes(),
+        scannedDeps({
+          extractText: async () => ({
+            ok: true,
+            value: {
+              text: '  \n\f\t ',
+              tabulatedText: REAL_GERMAN_TEXT,
+              pageCount: 1,
+              hasTextLayer: false,
+            },
+          }),
+        }),
+      ),
+    );
+
+    expect(result.text).toBe(OCR_PAPER_TEXT);
+    expect(result.confidence).toBe('low');
+  });
+});
+
+describe('real German sample with one consistent prescriber (fix round 3)', () => {
+  /** The committed real sample with its per-row prescribers unified. */
+  const ONE_DOCTOR_TEXT = realGermanOneDoctorFixture;
+
+  it('validates the inferred author and encodes a real CHMED16A1 string', async () => {
+    const result = expectSuccess(
+      await pdfToPrescription(
+        pdfBytes(),
+        makeDeps({
+          extractText: async () => ({
+            ok: true,
+            value: {
+              text: 'flat text that must not be parsed',
+              tabulatedText: ONE_DOCTOR_TEXT,
+              pageCount: 1,
+              hasTextLayer: true,
+            },
+          }),
+          // Real parser, real validator and real encoder (pako is node-safe).
+          parseText: parsePrescriptionText,
+          validate: validateObject,
+          encode: jsonToChmed,
+        }),
+      ),
+    );
+
+    expect(result.prescription.HcPerson).toEqual({
+      Gln: '7600000000000',
+      FName: 'Example',
+      LName: 'Karl',
+    });
+    expect(result.prescription.Medicaments).toHaveLength(5);
+    expect(result.chmed.startsWith('CHMED16A1')).toBe(true);
+    // The encoded string is the same document the UI shows as JSON.
+    expect(JSON.parse(result.json)).toEqual(result.prescription);
+  });
+
+  it('keeps the ambiguous real sample on the draft path instead of encoding', async () => {
+    const failure = expectFailure(
+      await pdfToPrescription(
+        pdfBytes(),
+        makeDeps({
+          extractText: async () => ({
+            ok: true,
+            value: {
+              text: 'flat text that must not be parsed',
+              tabulatedText: REAL_GERMAN_TEXT,
+              pageCount: 1,
+              hasTextLayer: true,
+            },
+          }),
+          parseText: parsePrescriptionText,
+          validate: validateObject,
+          encode: jsonToChmed,
+        }),
+      ),
+    );
+    if (failure.stage !== 'validate') {
+      throw new Error(`Expected a validate failure, got "${failure.stage}".`);
+    }
+
+    expect(failure.errors.map((error) => error.params)).toEqual([
+      { missingProperty: 'HcPerson' },
+      { missingProperty: 'HcOrg' },
+    ]);
+    // The draft is review material only; no CHMED string exists to leak.
+    expect(failure.draft?.prescription.HcPerson).toBeUndefined();
+    expect(JSON.parse(failure.draft?.json ?? '{}')).toEqual(failure.draft?.prescription);
   });
 });

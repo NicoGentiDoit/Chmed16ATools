@@ -13,10 +13,13 @@
  * 2. `extractText` — the pdfjs text layer plus `pageCount`/`hasTextLayer`.
  * 3. If the text layer is missing or whitespace-only: render every page,
  *    recognise them with OCR, mark `confidence: 'low'` and append the
- *    `ocr-low-confidence` warning. Otherwise the extracted text is used as is.
+ *    `ocr-low-confidence` warning. Otherwise the *tabulated* text of
+ *    `extractPdfText` is used when the item geometry produced a medication
+ *    table, and the flat text is the fallback.
  * 4. `parseText` — `{ ok: false, errors }` becomes `stage: 'parse'`.
  * 5. `validate` — the parsed object is checked against the rev-3 Rx schema;
- *    `{ ok: false }` becomes `stage: 'validate'`.
+ *    `{ ok: false }` becomes `stage: 'validate'` and carries the rejected
+ *    prescription as a `draft` (review only: nothing is encoded from it).
  * 6. `encode` — `jsonToChmed`; `{ ok: false }` becomes `stage: 'encode'`.
  * 7. Success carries the text that was parsed, the medication object, its
  *    pretty JSON, the encoded string, merged warnings, confidence and the
@@ -29,6 +32,10 @@
  * extraction, render and OCR reuse the Phase 2 codes (`not-pdf`,
  * `pdf-corrupt`, `pdf-password`, `render-failed`, `ocr-failed`,
  * `ocr-cancelled`) instead of inventing parallel ones.
+ *
+ * A `validate` failure additionally carries `draft` when a prescription object
+ * existed (fix round 3): the UI may show that JSON for review, but every encoded
+ * output stays gated on `validateObject` — the draft is never encoded.
  *
  * ## Warnings
  *
@@ -130,8 +137,37 @@ export interface PdfToPrescriptionSuccess {
 }
 
 /**
+ * The parsed prescription a validate-stage failure refused, kept for review.
+ *
+ * Encoding is gated on `validateObject`, so this value is strictly a draft: it
+ * is what the validator rejected, and no CHMED16A string is ever derived from
+ * it (fix round 3). `json` is `JSON.stringify(prescription, null, 2)`.
+ */
+export interface PdfToPrescriptionDraft {
+  readonly prescription: MedicationRx;
+  readonly json: string;
+}
+
+/**
+ * Blocking validation failure with the rejected prescription as a draft.
+ *
+ * `draft` is optional because `unexpectedFailure('validate')` reports a throw
+ * that happened before a payload existed; the UI then renders a plain error.
+ */
+export interface PdfToPrescriptionValidationFailure {
+  readonly ok: false;
+  readonly stage: 'validate';
+  readonly errors: readonly ValidationError[];
+  readonly draft?: PdfToPrescriptionDraft;
+}
+
+/**
  * Typed failure. `errors` is the stage's own error list, so a caller can narrow
  * on `stage` and read the exact Phase 1/2/validator shape.
+ *
+ * Only the `validate` variant can carry a `draft`: extract/ocr/parse failures
+ * have no prescription object, and an `encode` failure means the document was
+ * valid but could not be serialized (no draft is offered for it either).
  */
 export type PdfToPrescriptionFailure =
   | {
@@ -149,9 +185,10 @@ export type PdfToPrescriptionFailure =
       readonly stage: 'parse';
       readonly errors: readonly ParseError[];
     }
+  | PdfToPrescriptionValidationFailure
   | {
       readonly ok: false;
-      readonly stage: 'validate' | 'encode';
+      readonly stage: 'encode';
       readonly errors: readonly ValidationError[];
     };
 
@@ -163,6 +200,16 @@ export const MAX_OCR_PAGES = 20;
 const UNEXPECTED_MESSAGE = 'The PDF could not be processed.';
 const NO_PAGES_MESSAGE = 'The PDF has no pages to render.';
 const TOO_MANY_PAGES_MESSAGE = 'The scanned PDF has more pages than this tool can read.';
+
+/** The single blocking finding of a stage that threw before producing output. */
+function internalError(): ValidationError {
+  return {
+    instancePath: '',
+    keyword: 'internal',
+    message: UNEXPECTED_MESSAGE,
+    params: {},
+  };
+}
 
 const OCR_LOW_CONFIDENCE_WARNING: PdfToPrescriptionWarning = {
   code: 'ocr-low-confidence',
@@ -286,19 +333,9 @@ function unexpectedFailure(stage: PdfToPrescriptionStage): PdfToPrescriptionFail
         errors: [{ code: 'invalid-value', path: '', message: UNEXPECTED_MESSAGE }],
       };
     case 'validate':
+      return { ok: false, stage, errors: [internalError()] };
     case 'encode':
-      return {
-        ok: false,
-        stage,
-        errors: [
-          {
-            instancePath: '',
-            keyword: 'internal',
-            message: UNEXPECTED_MESSAGE,
-            params: {},
-          },
-        ],
-      };
+      return { ok: false, stage, errors: [internalError()] };
   }
 }
 
@@ -355,9 +392,19 @@ export async function pdfToPrescription(
         return { ok: false, stage: 'ocr', errors: [recognised.error] };
       }
 
+      // The OCR path stays flat: recognized text has no item geometry, so the
+      // tolerant parser path reads it (and the low-confidence warning says so).
       text = recognised.text;
       confidence = 'low';
       extraWarnings.push(OCR_LOW_CONFIDENCE_WARNING);
+    } else if (
+      extracted.value.tabulatedText !== undefined &&
+      extracted.value.tabulatedText.trim() !== ''
+    ) {
+      // Geometry-based reconstruction is the more faithful rendering of the
+      // printed table; the flat text is only a fallback (older extractors, or
+      // a page whose geometry yielded no medication header).
+      text = extracted.value.tabulatedText;
     }
 
     stage = 'parse';
@@ -372,7 +419,17 @@ export async function pdfToPrescription(
       rev: parsed.value.rev ?? 3,
     });
     if (!validation.ok) {
-      return { ok: false, stage: 'validate', errors: validation.errors };
+      // The rejected prescription is still useful for review: it is returned as
+      // a clearly marked draft, and the encoder is never called (fix round 3).
+      return {
+        ok: false,
+        stage: 'validate',
+        errors: validation.errors,
+        draft: {
+          prescription: parsed.value,
+          json: JSON.stringify(parsed.value, null, 2),
+        },
+      };
     }
 
     stage = 'encode';

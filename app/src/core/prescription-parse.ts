@@ -18,6 +18,28 @@
  * `app/src/core/qr-scan.ts:1-13` for the pure/adapter split precedent).
  * Header blocks use the printed `Label: value` form.
  *
+ * Since fix round 2 the text-layer path feeds `pdf-extract.ts`'s
+ * `tabulateLayout`: it rebuilds one pipe-separated line per printed y-band row
+ * from the PDF item geometry, so the strict path also applies to real layouts
+ * whose column gaps oscillate (and therefore cannot be split on spaces). The
+ * strict path still wins for separator-formatted input and the tolerant path
+ * still serves flat OCR text; the three inputs share one output contract.
+ *
+ * ## Real-world paper variations (fix round 2)
+ *
+ * The German HCI sample prints a title vocabulary and edge cases the English
+ * spec table does not name, so the parser accepts them in addition:
+ * - titles `Einheit` (quantity) and `Anleitung` (instructions);
+ * - wrapped header fragments such as `zur` / `durch` (they carry no column and
+ *   are dropped by the tabulator; a bare `durch` line is never a title);
+ * - `-` in a dose or date cell: the printed form of an empty cell, i.e. dose 0
+ *   and "no end date", never an `invalid-value`;
+ * - an unlabelled patient block: a `DD.MM.YYYY (M|W|F)` line is the birth line,
+ *   with the name above and the address below it (labelled anchors still win);
+ * - the provider label `erstellt von` (with the printed space before the colon);
+ * - a second table (`Reservemedikation`): its rows append to the same
+ *   medicaments array in document order.
+ *
  * ## Two layout paths (same output contract)
  *
  * Both paths produce the same `MedicationRx` (or typed `ParseError[]`), and both
@@ -62,7 +84,7 @@
  * | Up to and including       | `Pos[0].DtTo`                             |
  * | Instructions              | `MedicamentRx.AppInstr`                   |
  * | Reason                    | not a Rx field (`TkgRsn` is MP only)      |
- * | Prescribed by             | not a Rx field (`PrscbBy`/`AutoMed` MP)   |
+ * | Prescribed by             | not a Rx field (`PrscbBy`/`AutoMed` MP); a unique printed value infers the author (`HcPerson`), see `uniquePrescriber` |
  * | Reserve medication        | not representable (Rx `Pos` only `D`/`DtTo`) |
  *
  * `Rep`, `Subs`, `NbPack` and `IndC` are not printed columns, but they are
@@ -90,6 +112,14 @@
  *   `HcOrg` are emitted only when their required parts were actually detected,
  *   so revision-3 validation surfaces the gap instead of the parser inventing
  *   values (plan 002, Notes/Edge Cases).
+ * - Fix round 3 (author inference): when the document-level author is unnamed
+ *   and the medication table prints `Prescribed by` / `Verordnet durch` for its
+ *   rows, exactly one distinct printed prescriber becomes the `HcPerson` name
+ *   (`uniquePrescriber`). The GLN still comes only from an explicitly printed
+ *   `GLN:` field, because revision 3 makes `HcPerson.Gln` required: with no
+ *   printed GLN no `HcPerson` is created at all. Two or more distinct
+ *   prescribers mean no inference (the validator reports the missing required
+ *   field); the parser never picks an author and never adds an error of its own.
  * - `rev` is always `3`; the rev-1 assumption of `prescription.md:225-233` is
  *   never used.
  */
@@ -126,7 +156,7 @@ export type PrescriptionParseResult =
  * anchored at the start of a cell and uses a bounded lookahead instead of `\b`
  * so accented titles (e.g. `Quantité`) terminate correctly.
  */
-type ColumnKey =
+export type ColumnKey =
   | 'medication'
   | 'morning'
   | 'noon'
@@ -140,20 +170,54 @@ type ColumnKey =
   | 'prescribedBy'
   | 'reserve';
 
+/**
+ * Printed title vocabulary. Exported (`columnKeyFor`) so the geometry
+ * tabulator of `pdf-extract.ts` maps header items with exactly the same titles
+ * this parser understands — one vocabulary, no drift between the two layers.
+ *
+ * `einheit` and `anleitung` are the German titles of the real HCI eMediplan
+ * sample (quantity / instructions); the English spec table uses
+ * `Quantity` / `Instructions`. The 2023 German sample prints the two-word
+ * titles `Anwendungsinstruktion` / `Anwendungsgrund` instead (fix round 4);
+ * they are distinct roots from `anleitung` / `grund`, so the anchored matchers
+ * cannot partially overlap.
+ */
 const COLUMN_MATCHERS: ReadonlyArray<readonly [ColumnKey, RegExp]> = [
   ['medication', /^(?:medication|medikamente?|médicament|medicament|farmaco)(?=$|[\s(])/iu],
   ['morning', /^(?:morning|morgen|morgens|matin|mattina)(?=$|[\s(])/iu],
   ['noon', /^(?:noon|mittag|midi|mezzogiorno)(?=$|[\s(])/iu],
   ['evening', /^(?:evening|abend|soir|sera)(?=$|[\s(])/iu],
   ['night', /^(?:night|nacht|nuit|notte)(?=$|[\s(])/iu],
-  ['quantity', /^(?:quantity|menge|quantité|quantita|quantità)(?=$|[\s(])/iu],
+  ['quantity', /^(?:quantity|menge|einheit|quantité|quantita|quantità)(?=$|[\s(])/iu],
   ['upTo', /^(?:up to|bis|au|fino)(?=$|[\s(])/iu],
   ['from', /^(?:from|von|du|dal)(?=$|[\s(])/iu],
-  ['instructions', /^(?:instructions?|hinweise?|indicazioni)(?=$|[\s(])/iu],
-  ['reason', /^(?:reason|grund|raison|motivo)(?=$|[\s(])/iu],
+  [
+    'instructions',
+    /^(?:instructions?|hinweise?|anleitung|anwendungsinstruktion|indicazioni)(?=$|[\s(])/iu,
+  ],
+  ['reason', /^(?:reason|grund|anwendungsgrund|raison|motivo)(?=$|[\s(])/iu],
   ['prescribedBy', /^(?:prescribed by|verordnet|prescrit|prescritto)(?=$|[\s(])/iu],
   ['reserve', /^(?:reserve|reservemedikation)(?=$|[\s(])/iu],
 ];
+
+/**
+ * First column whose printed title matches `cell`.
+ *
+ * Bounded and allocation-free; empty cells carry no title. Used by `layoutFor`
+ * and by the geometry tabulator in `pdf-extract.ts`.
+ */
+export function columnKeyFor(cell: string): ColumnKey | undefined {
+  const value = cell.trim();
+  if (value === '') {
+    return undefined;
+  }
+  for (const [key, pattern] of COLUMN_MATCHERS) {
+    if (pattern.test(value)) {
+      return key;
+    }
+  }
+  return undefined;
+}
 
 /** `Label: value`; the label is bounded so a hostile line cannot backtrack. */
 const LABEL_PATTERN = /^([^:|]{1,40}?)\s*:\s*(.*)$/;
@@ -208,6 +272,9 @@ const CREATED_BY_LABELS = [
   'author',
   'verordnet von',
   'prescrit par',
+  // German HCI sample: printed with a space before the colon (`erstellt von :`).
+  // The `Label: value` splitter below already tolerates that space.
+  'erstellt von',
 ];
 const ORG_LABELS = [
   'organisation',
@@ -238,6 +305,17 @@ const ORG_HINT_PATTERN =
   /(?:praxis|apotheke|pharmacy|pharmacie|klinik|clinic|spital|hospital|zentrum|center|institut|institute|labor|gmbh|sarl)\b/i;
 const HONORIFIC_IN_PATTERN = /\b(?:dr|prof|med|dipl)\./i;
 const HONORIFIC_TOKEN_PATTERN = /^(?:dr|prof|med|dipl|phil|nat|sc|mr|mrs|ms|frau|herr)\.?$/i;
+/**
+ * The printed `Prescribed by` values that name no prescriber: self-medication
+ * (`chmed16a/README.md:1735-1745`) in the four paper languages.
+ *
+ * Fix round 4: the token is matched as a *prefix* of the cell, with a word
+ * boundary after it, because a real layout can glue the printed `Reason` into
+ * the same band cell (`Selbstmedikation Fieber`). The anchor at the start stays
+ * strict: text that merely contains the word is still read as a value.
+ */
+const SELF_MEDICATION_PATTERN =
+  /^(?:selbstmedikation|self[\s-]?medication|automédication|automedicazione)\b/i;
 
 const DATE_INLINE_PATTERN = /\b(\d{1,2}\.\d{1,2}\.\d{4}|\d{4}-\d{2}-\d{2})\b/;
 const DMY_DATE_PATTERN = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/;
@@ -248,16 +326,33 @@ const GENDER_IN_PARENS_PATTERN = /\(\s*(männlich|weiblich|male|female|m|w|f)\s*
 const MALE_PATTERN = /^(?:m|male|männlich|mann|herr)$/i;
 const FEMALE_PATTERN = /^(?:f|w|female|weiblich|frau)$/i;
 
+/**
+ * An unlabelled birth line of the compact patient block: the date followed by
+ * the printed gender letter, e.g. `01.11.1943 (M)` / `01.11.1943 (W)`.
+ */
+const COMPACT_BORN_PATTERN =
+  /^(?:\d{1,2}\.\d{1,2}\.\d{4}|\d{4}-\d{2}-\d{2})\s*\(\s*(?:m|w|f|male|female|männlich|weiblich)\s*\)$/i;
+
 const STREET_ADDRESS_PATTERN = /^(.{1,80}?),\s*(\d{4,5})\s+(.{1,60})$/;
 const ZIP_CITY_PATTERN = /^(\d{4,5})\s+(.{1,60})$/;
 
 const DECIMAL_DOSE_PATTERN = /^\d{1,3}(?:[.,]\d{1,2})?$/;
 const MIXED_FRACTION_PATTERN = /^(\d{1,3}) (\d{1,2}\/\d{1,2})$/;
+/**
+ * The dose cell can print `See instructions` instead of four doses. Fix round 4
+ * adds the German 2023 wording `siehe Anwendungsinstruktion`; the existing
+ * alternates are unchanged.
+ */
 const SEE_INSTRUCTIONS_PATTERN =
-  /see instructions?|nach Anweisung|voir les instructions|secondo le istruzioni/i;
+  /see instructions?|nach Anweisung|voir les instructions|secondo le istruzioni|\bsiehe Anwendungsinstruktion\b/i;
 
 /** A single whitespace-delimited dose cell (`1`, `0`, `½`, `1/3`, `1,5`). */
-const DOSE_TOKEN_PATTERN = /^(?:\d{1,3}(?:[.,]\d{1,2})?|[½¼¾⅛]|\d{1,2}\/\d{1,2})$/u;
+const DOSE_TOKEN_PATTERN = /^(?:-|–|\d{1,3}(?:[.,]\d{1,2})?|[½¼¾⅛]|\d{1,2}\/\d{1,2})$/u;
+/**
+ * The printed form of an empty cell: a lone dash (the German HCI sample prints
+ * `-` in every empty dose/date/unit cell of the medication table).
+ */
+const DASH_CELL_PATTERN = /^[-–—]$/;
 /** A single whitespace-delimited printed date cell. */
 const DATE_TOKEN_PATTERN = /^(?:\d{1,2}\.\d{1,2}\.\d{4}|\d{4}-\d{2}-\d{2})$/;
 /** First token of a printed header row (`Medication`, `Medikamente`, ...). */
@@ -271,8 +366,13 @@ const NBPACK_PATTERN = /^nbpack\s*[:=]\s*(\d{1,3})$/i;
 const SUBS_PATTERN = /^subs?\s*[:=]\s*([01])$/i;
 const INDC_PATTERN = /^indc\s*[:=]\s*(\d{5}\.\d{2})$/i;
 
-const COMMENT_STOP_PATTERN = /^(?:comment|bemerkung|remark|footer)\b/i;
-const PAGE_MARKER_PATTERN = /\bpage\s+\d{1,3}\s+of\s+\d{1,3}\s*$/i;
+const COMMENT_STOP_PATTERN = /^(?:comment|comments|bemerkung|kommentar|remark|remarks|footer)\b/i;
+/** `Page 1 of 1` and the German `Seite 1 von 1` footer. */
+const PAGE_MARKER_PATTERN = /\b(?:page|seite)\s+\d{1,3}\s+(?:of|von)\s+\d{1,3}\s*$/i;
+/** The generator line of the printed footer, e.g. `eMediplan by HCI Solutions AG`. */
+const FOOTER_GENERATOR_PATTERN = /eMediplan\s+by\b/i;
+/** A second table is introduced by its printed title; its rows are still parsed. */
+const RESERVE_TITLE_PATTERN = /^(?:reservemedikation|reserve medication)$/i;
 
 /** Printed dosage fractions (`chmed16a/README.md:1738`). */
 const FRACTION_DOSES: ReadonlyMap<string, number> = new Map([
@@ -331,6 +431,8 @@ interface ColumnLayout {
   quantity?: number;
   upTo?: number;
   instructions?: number;
+  /** `Prescribed by` / `Verordnet durch`; read for author inference only. */
+  prescribedBy?: number;
 }
 
 /**
@@ -389,6 +491,18 @@ function splitColumns(line: string): readonly string[] {
   }
   const spaced = line.split(/\s{2,}/).map((cell) => cell.trim());
   return spaced.length >= 2 ? spaced : [line.trim()];
+}
+
+/**
+ * True for the printed representation of an empty cell: nothing, or a lone dash.
+ *
+ * The German HCI sample prints every empty dose/date/unit cell as `-`; the
+ * English spec example leaves the same cells blank, so both forms mean "no
+ * value" and neither is an `invalid-value`.
+ */
+function isBlankCell(raw: string): boolean {
+  const value = raw.trim();
+  return value === '' || DASH_CELL_PATTERN.test(value);
 }
 
 /** Splits `Label: value`; returns `undefined` for non-label lines. */
@@ -709,6 +823,24 @@ function scanHeader(lines: readonly string[]): HeaderScan {
         state = 'provider';
       } else if (PATIENT_SECTION_PATTERN.test(line)) {
         state = 'patient';
+      } else if (scan.patient.bDt === undefined && scan.patient.bDtRaw === undefined) {
+        // Unlabelled compact patient block (German HCI sample): the birth line
+        // is `DD.MM.YYYY (M|W)`, the name is the line above it and the address
+        // the line below. Labelled `Born on:` anchors were handled above and
+        // keep priority because they set `bDt`/`bDtRaw` first.
+        if (COMPACT_BORN_PATTERN.test(line)) {
+          state = 'patient';
+          const born = parseBornOn(line);
+          if (born.date !== undefined) {
+            scan.patient.bDt = born.date;
+          } else if (born.rawDate !== undefined) {
+            scan.patient.bDtRaw = born.rawDate;
+          }
+          if (scan.patient.gender === undefined && born.gender !== undefined) {
+            scan.patient.gender = born.gender;
+          }
+          fillCompactPatient(scan.patient, lines, index);
+        }
       }
       continue;
     }
@@ -858,6 +990,78 @@ function buildProvider(provider: ProviderScan): {
 }
 
 /* -------------------------------------------------------------------------- */
+/* Author inference from the `Prescribed by` column (fix round 3)             */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One printed `Prescribed by` / `Verordnet durch` cell → the printed name parts.
+ *
+ * The cell of the German HCI sample is `Dr. Example Karl, Wängi`: the honorifics
+ * are dropped and `FName`/`LName` are split by `splitPersonName`, i.e. exactly
+ * the heuristic of the document-level provider block (`buildProvider`). The
+ * part after the first comma is the printed city line the provider block also
+ * prints on its second address line; a `HealthcarePerson` has no city, so it is
+ * dropped instead of being glued into the family name.
+ *
+ * Empty cells, the printed dash and the self-medication markers name no
+ * prescriber and yield `undefined`: nothing is ever invented here.
+ */
+function parsePrescriberCell(raw: string): { fName: string; lName: string } | undefined {
+  const value = raw.trim();
+  if (value === '' || isBlankCell(value) || SELF_MEDICATION_PATTERN.test(value)) {
+    return undefined;
+  }
+  const namePart = (value.split(',')[0] ?? '').trim();
+  if (namePart === '') {
+    return undefined;
+  }
+  return splitPersonName(namePart);
+}
+
+/**
+ * The single prescriber printed on every medication row of the document.
+ *
+ * Spec anchor: `chmed16a/prescription.md:341-352` — `HcPerson` is *the author of
+ * the document*, and revision 2+ requires it. The German HCI sample leaves the
+ * document-level `erstellt von :` empty and prints the prescribing doctor per
+ * row instead, so the `Prescribed by` column is the only authorship evidence
+ * such a document carries (fix round 3, user-approved).
+ *
+ * Decision rules:
+ * - Self-medication markers, empty cells and the printed dash are ignored
+ *   (`parsePrescriberCell`).
+ * - Rows are compared by the parsed `FName`/`LName` pair, so `Dr. Example Karl`
+ *   and `Example Karl` are the same author; honorific variants cannot fake an
+ *   ambiguity.
+ * - Exactly one distinct identity is returned. Two or more distinct identities
+ *   return `undefined`: the parser never chooses between authors and adds no
+ *   error of its own, the revision-3 validator reports the missing `HcPerson`
+ *   (and `HcOrg`) as before. Inference is strictly additive.
+ */
+function uniquePrescriber(
+  cells: readonly string[],
+): { fName: string; lName: string } | undefined {
+  let unique: { fName: string; lName: string } | undefined;
+  let key = '';
+  for (const cell of cells) {
+    const person = parsePrescriberCell(cell);
+    if (person === undefined) {
+      continue;
+    }
+    const candidate = `${person.fName} ${person.lName}`.toLowerCase();
+    if (unique === undefined) {
+      unique = person;
+      key = candidate;
+      continue;
+    }
+    if (candidate !== key) {
+      return undefined;
+    }
+  }
+  return unique;
+}
+
+/* -------------------------------------------------------------------------- */
 /* Medication table (`chmed16a/README.md:1735-1745`)                          */
 /* -------------------------------------------------------------------------- */
 
@@ -869,19 +1073,11 @@ function buildProvider(provider: ProviderScan): {
 function layoutFor(cells: readonly string[]): ColumnLayout | undefined {
   const indices = new Map<ColumnKey, number>();
   cells.forEach((cell, index) => {
-    const value = cell.trim();
-    if (value === '') {
+    const key = columnKeyFor(cell);
+    if (key === undefined || indices.has(key)) {
       return;
     }
-    for (const [key, pattern] of COLUMN_MATCHERS) {
-      if (indices.has(key)) {
-        continue;
-      }
-      if (pattern.test(value)) {
-        indices.set(key, index);
-        return;
-      }
-    }
+    indices.set(key, index);
   });
   const medication = indices.get('medication');
   if (medication === undefined || indices.size < 4) {
@@ -896,6 +1092,7 @@ function layoutFor(cells: readonly string[]): ColumnLayout | undefined {
     quantity: indices.get('quantity'),
     upTo: indices.get('upTo'),
     instructions: indices.get('instructions'),
+    prescribedBy: indices.get('prescribedBy'),
   };
 }
 
@@ -909,12 +1106,13 @@ function readCell(cells: readonly string[], index: number | undefined): string {
 
 /**
  * One printed dose cell → number. Empty cells count as 0 (nothing taken at that
- * time of day); the printed fractions of `chmed16a/README.md:1738` and mixed
+ * time of day), and the printed dash of an empty cell means the same (see
+ * `isBlankCell`); the printed fractions of `chmed16a/README.md:1738` and mixed
  * forms such as `1 1/2` are mapped to decimals.
  */
 function parseDose(raw: string): number | undefined {
   const value = raw.trim().replace(/\s+/g, ' ');
-  if (value === '') {
+  if (isBlankCell(value)) {
     return 0;
   }
   const fraction = FRACTION_DOSES.get(value);
@@ -1054,11 +1252,11 @@ function parseMedicamentCells(
 
   const medicament: MedicamentRx = { Id: identity.id, IdType: identity.idType };
   const unit = readCell(cells, layout.quantity);
-  if (unit !== '') {
+  if (!isBlankCell(unit)) {
     medicament.Unit = unit;
   }
   const instructions = readCell(cells, layout.instructions);
-  if (instructions !== '') {
+  if (!isBlankCell(instructions)) {
     medicament.AppInstr = instructions;
   }
   const extras = readExtras(cells);
@@ -1077,7 +1275,11 @@ function parseMedicamentCells(
 
   const endRaw = readCell(cells, layout.upTo);
   let endDate: string | undefined;
-  if (endRaw !== '') {
+  // A blank or printed-dash end cell means "no end date": the row keeps no
+  // `DtTo` instead of failing on an `invalid-value`. The German sample's `Von`
+  // (from) column is never read as an end date: `ColumnLayout` has no `from`
+  // index at all, so the value is consumed and dropped with the cell.
+  if (!isBlankCell(endRaw)) {
     endDate = extractDate(endRaw);
     if (endDate === undefined) {
       errors.push({
@@ -1115,33 +1317,55 @@ function parseMedicamentRows(
   lines: readonly string[],
   headerIndex: number,
   layout: ColumnLayout,
-): { medicaments: MedicamentRx[]; errors: ParseError[] } {
+): { medicaments: MedicamentRx[]; errors: ParseError[]; prescribers: string[] } {
   const medicaments: MedicamentRx[] = [];
   const errors: ParseError[] = [];
+  const prescribers: string[] = [];
+  // A second table (`Reservemedikation`) re-prints the column titles, possibly
+  // at different x positions but in the same order; re-deriving the layout from
+  // its own header keeps index-based reads honest across tables.
+  let activeLayout = layout;
 
   for (let index = headerIndex + 1; index < lines.length; index += 1) {
     const line = lines[index]?.trim() ?? '';
     if (line === '') {
       continue;
     }
-    if (COMMENT_STOP_PATTERN.test(line) || PAGE_MARKER_PATTERN.test(line)) {
+    if (
+      COMMENT_STOP_PATTERN.test(line) ||
+      PAGE_MARKER_PATTERN.test(line) ||
+      FOOTER_GENERATOR_PATTERN.test(line)
+    ) {
       break;
+    }
+    if (RESERVE_TITLE_PATTERN.test(line)) {
+      // Printed table title of the reserve table: a marker, not a row.
+      continue;
     }
     const cells = splitColumns(line);
     if (cells.length < 2) {
       continue;
     }
-    if (layoutFor(cells) !== undefined) {
-      // Repeated column titles on a following page (`chmed16a/README.md:1731`).
+    const repeated = layoutFor(cells);
+    if (repeated !== undefined) {
+      // Repeated column titles on a following page or of a following table
+      // (`chmed16a/README.md:1731`).
+      activeLayout = repeated;
       continue;
     }
-    const medicament = parseMedicamentCells(cells, layout, medicaments.length, errors);
+    const medicament = parseMedicamentCells(cells, activeLayout, medicaments.length, errors);
     if (medicament !== undefined) {
       medicaments.push(medicament);
+      // The `Prescribed by` cell is not an Rx medicament field; it is collected
+      // only to infer the document author (`uniquePrescriber`).
+      const prescriber = readCell(cells, activeLayout.prescribedBy);
+      if (!isBlankCell(prescriber)) {
+        prescribers.push(prescriber);
+      }
     }
   }
 
-  return { medicaments, errors };
+  return { medicaments, errors, prescribers };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1172,7 +1396,14 @@ const TOLERANT_TITLE_PAIRS: ReadonlyArray<
   [/^prescribed$/i, /^by$/i, 'prescribedBy'],
 ];
 
-/** Recognized column titles of a single-spaced header line. */
+/**
+ * Recognized column titles of a single-spaced header line.
+ *
+ * Single-token titles are read through the shared {@link COLUMN_MATCHERS}
+ * vocabulary, so every title it knows — including the 2023 German
+ * `Anwendungsinstruktion` / `Anwendungsgrund` — is recognized here as well;
+ * `TOLERANT_TITLE_PAIRS` only adds the titles printed as two words.
+ */
 function tolerantTitles(line: string): Set<ColumnKey> {
   const titles = new Set<ColumnKey>();
   const tokens = line.split(/\s+/).filter((token) => token !== '');
@@ -1262,42 +1493,54 @@ function doseWindow(tokens: readonly RowToken[]): number | undefined {
 }
 
 /**
- * Peels the non-representable trailing columns from a free-text run.
+ * Peels the free-text columns from a single-spaced trailing run.
  *
- * `Reason` and `Prescribed by` have no Rx field. With the column gaps gone
- * their only remaining signal is position, so an honorific token starts
- * `Prescribed by`, the last word before it is the short printed `Reason` label,
- * and the rest is `Instructions`. Text is never invented; at worst a multi-word
+ * `Reason` and `Prescribed by` have no Rx `MedicamentRx` field. With the column
+ * gaps gone their only remaining signal is position, so an honorific token
+ * starts `Prescribed by`, the last word before it is the short printed `Reason`
+ * label, and the rest is `Instructions`. Without an honorific the last word is
+ * the printed `Prescribed by` label itself (e.g. `Selbstmedikation`), which the
+ * strict path reads as a cell. Text is never invented; at worst a multi-word
  * `Reason` shortens the instruction by the same number of words, which is why an
  * OCR result is always reported as low confidence.
+ *
+ * The peeled `Prescribed by` run is returned as well because the author
+ * inference (`uniquePrescriber`) must see exactly the same evidence on the
+ * tolerant path as the strict path feeds it from a cell.
  */
-function tailInstructions(tokens: readonly string[], layout: TolerantLayout): string {
+function tailFields(
+  tokens: readonly string[],
+  layout: TolerantLayout,
+): { instructions: string; prescriber: string } {
   let end = tokens.length;
+  let prescriber = '';
   const honorific = tokens.findIndex((token) => HONORIFIC_TOKEN_PATTERN.test(token));
   if (honorific >= 0) {
     end = honorific;
+    prescriber = tokens.slice(honorific).join(' ');
   } else if (layout.hasPrescribedBy && end > 0) {
     // No honorific: `Prescribed by` printed a short label ("Self-medication").
     end -= 1;
+    prescriber = tokens[end] ?? '';
   }
   if (layout.hasReason && end > 0) {
     end -= 1;
   }
-  return tokens.slice(0, end).join(' ');
+  return { instructions: tokens.slice(0, end).join(' '), prescriber };
 }
 
 /**
- * One single-spaced row → medicament, or `undefined` when the line is not a
- * medication row. Mirrors `parseMedicamentCells`: identity, unit, instructions,
- * end date and the dose vector, with the same typed errors for unreadable
- * values.
+ * One single-spaced row → medicament (and the peeled `Prescribed by` run), or
+ * `undefined` when the line is not a medication row. Mirrors
+ * `parseMedicamentCells`: identity, unit, instructions, end date and the dose
+ * vector, with the same typed errors for unreadable values.
  */
 function parseTolerantRow(
   line: string,
   layout: TolerantLayout,
   rowIndex: number,
   errors: ParseError[],
-): MedicamentRx | undefined {
+): { medicament: MedicamentRx; prescriber: string } | undefined {
   const tokens = tokenizeRow(line);
   const window = doseWindow(tokens);
 
@@ -1349,12 +1592,19 @@ function parseTolerantRow(
   let cursor = 0;
   const quantity = tail[cursor];
   if (quantity !== undefined && !DATE_TOKEN_PATTERN.test(quantity.text)) {
-    medicament.Unit = quantity.text;
+    // A printed dash in the unit cell means "no unit" (same as an empty cell).
+    if (!DASH_CELL_PATTERN.test(quantity.text)) {
+      medicament.Unit = quantity.text;
+    }
     cursor += 1;
   }
   if (layout.hasFrom) {
     const from = tail[cursor];
-    if (from !== undefined && DATE_TOKEN_PATTERN.test(from.text)) {
+    if (
+      from !== undefined &&
+      (DATE_TOKEN_PATTERN.test(from.text) || DASH_CELL_PATTERN.test(from.text))
+    ) {
+      // The printed `From` column has no Rx field: consume it, never `DtTo`.
       cursor += 1;
     }
   }
@@ -1363,14 +1613,16 @@ function parseTolerantRow(
   if (upTo !== undefined && DATE_TOKEN_PATTERN.test(upTo.text)) {
     endRaw = upTo.text;
     cursor += 1;
+  } else if (upTo !== undefined && DASH_CELL_PATTERN.test(upTo.text)) {
+    cursor += 1;
   }
 
-  const instructions = tailInstructions(
+  const fields = tailFields(
     tail.slice(cursor).map((token) => token.text),
     layout,
   );
-  if (instructions !== '') {
-    medicament.AppInstr = instructions;
+  if (!isBlankCell(fields.instructions)) {
+    medicament.AppInstr = fields.instructions;
   }
 
   let endDate: string | undefined;
@@ -1403,7 +1655,7 @@ function parseTolerantRow(
     medicament.Pos = [posology];
   }
 
-  return medicament;
+  return { medicament, prescriber: fields.prescriber };
 }
 
 /** Reads the rows below a tolerant header, skipping repeated header lines. */
@@ -1411,29 +1663,40 @@ function parseTolerantMedicamentRows(
   lines: readonly string[],
   headerIndex: number,
   layout: TolerantLayout,
-): { medicaments: MedicamentRx[]; errors: ParseError[] } {
+): { medicaments: MedicamentRx[]; errors: ParseError[]; prescribers: string[] } {
   const medicaments: MedicamentRx[] = [];
   const errors: ParseError[] = [];
+  const prescribers: string[] = [];
 
   for (let index = headerIndex + 1; index < lines.length; index += 1) {
     const line = lines[index]?.trim() ?? '';
     if (line === '') {
       continue;
     }
-    if (COMMENT_STOP_PATTERN.test(line) || PAGE_MARKER_PATTERN.test(line)) {
+    if (
+      COMMENT_STOP_PATTERN.test(line) ||
+      PAGE_MARKER_PATTERN.test(line) ||
+      FOOTER_GENERATOR_PATTERN.test(line)
+    ) {
       break;
+    }
+    if (RESERVE_TITLE_PATTERN.test(line)) {
+      continue;
     }
     if (isTolerantHeaderLine(line)) {
       // Repeated column titles on a following page (`chmed16a/README.md:1731`).
       continue;
     }
-    const medicament = parseTolerantRow(line, layout, medicaments.length, errors);
-    if (medicament !== undefined) {
-      medicaments.push(medicament);
+    const parsedRow = parseTolerantRow(line, layout, medicaments.length, errors);
+    if (parsedRow !== undefined) {
+      medicaments.push(parsedRow.medicament);
+      if (!isBlankCell(parsedRow.prescriber)) {
+        prescribers.push(parsedRow.prescriber);
+      }
     }
   }
 
-  return { medicaments, errors };
+  return { medicaments, errors, prescribers };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1512,7 +1775,7 @@ function parseInternal(text: string): PrescriptionParseResult {
     strictHeader === undefined ? findTolerantHeader(lines) : undefined;
 
   let headerIndex: number;
-  let rows: { medicaments: MedicamentRx[]; errors: ParseError[] };
+  let rows: { medicaments: MedicamentRx[]; errors: ParseError[]; prescribers: string[] };
   if (strictHeader !== undefined) {
     headerIndex = strictHeader.index;
     rows = parseMedicamentRows(lines, headerIndex, strictHeader.layout);
@@ -1643,6 +1906,24 @@ function parseInternal(text: string): PrescriptionParseResult {
   };
   if (provider.hcPerson !== undefined) {
     value.HcPerson = provider.hcPerson;
+  } else {
+    // Fix round 3: the document-level author block is unnamed, but exactly one
+    // prescriber is printed on the medication rows. `HcPerson.Gln` is required
+    // by revision 2+ (`chmed16a/prescription.md:761-788`), so the inference
+    // borrows only an explicitly printed GLN; without one no `HcPerson` is
+    // created and the validator keeps reporting the gap.
+    const author = uniquePrescriber(rows.prescribers);
+    if (author !== undefined && scan.provider.gln !== undefined) {
+      const hcPerson: HealthcarePerson = {
+        Gln: scan.provider.gln,
+        FName: author.fName,
+        LName: author.lName,
+      };
+      if (scan.provider.zsr !== undefined) {
+        hcPerson.Zsr = scan.provider.zsr;
+      }
+      value.HcPerson = hcPerson;
+    }
   }
   if (provider.hcOrg !== undefined) {
     value.HcOrg = provider.hcOrg;
@@ -1670,6 +1951,12 @@ function parseInternal(text: string): PrescriptionParseResult {
  * cryptographic UUID v4) and an `Auth` string derived from the provider GLN. If
  * the environment has no CSPRNG at all, the parse fails closed with
  * `invalid-value` at `/Id` rather than inventing a predictable id.
+ *
+ * `HcPerson` comes from the provider block when it names a person next to a
+ * printed GLN; otherwise a single distinct printed prescriber supplies the name
+ * (`uniquePrescriber`) while the GLN still has to be printed. An ambiguous
+ * document yields no `HcPerson` at all, so revision-3 validation surfaces the
+ * gap instead of the parser choosing an author.
  */
 export function parsePrescriptionText(text: string): PrescriptionParseResult {
   try {

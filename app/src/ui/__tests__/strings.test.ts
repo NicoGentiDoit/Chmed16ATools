@@ -85,6 +85,7 @@ const EXPECTED_KEYS = [
   'pdfStageExtract',
   'pdfStageOcr',
   'pdfStageParse',
+  'pdfStageParseValues',
   'pdfStageValidate',
   'pdfStageEncode',
   'pdfUnexpected',
@@ -92,6 +93,9 @@ const EXPECTED_KEYS = [
   'pdfFileTooLarge',
   'pdfJsonOutputHeading',
   'pdfJsonOutputLabel',
+  'pdfDraftHeading',
+  'pdfDraftHint',
+  'pdfDraftStatus',
   'pdfQrEmpty',
   'iconCheckLabel',
   'iconAlertLabel',
@@ -114,6 +118,17 @@ describe('UI strings', () => {
 
   it('keeps a stable key set', () => {
     expect(Object.keys(STRINGS)).toEqual([...EXPECTED_KEYS]);
+  });
+
+  it('differentiates an unrecognized layout from unreadable printed values', () => {
+    // The parse-stage headline has two truthful outcomes (fix round 4): the
+    // layout was not found at all, or it was found but its values were not
+    // readable. Both keys must stay stable and distinct.
+    expect(text('pdfStageParse')).toBe('No eMediplan prescription was found in the text.');
+    expect(text('pdfStageParseValues')).toBe(
+      'The eMediplan layout was recognised, but some printed values could not be read; review the errors.',
+    );
+    expect(text('pdfStageParseValues')).not.toBe(text('pdfStageParse'));
   });
 
   it('resolves every key through text()', () => {

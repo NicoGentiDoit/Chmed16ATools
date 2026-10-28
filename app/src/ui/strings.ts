@@ -104,6 +104,8 @@ export const STRINGS = {
   pdfStageExtract: 'The PDF could not be read.',
   pdfStageOcr: 'The scanned pages could not be recognized.',
   pdfStageParse: 'No eMediplan prescription was found in the text.',
+  pdfStageParseValues:
+    'The eMediplan layout was recognised, but some printed values could not be read; review the errors.',
   pdfStageValidate: 'The extracted prescription is not valid.',
   pdfStageEncode: 'The prescription could not be encoded.',
   pdfUnexpected: 'The PDF could not be processed.',
@@ -112,6 +114,10 @@ export const STRINGS = {
     'The selected PDF is larger than 25 MB. Choose a smaller file.',
   pdfJsonOutputHeading: 'Extracted ePrescription JSON',
   pdfJsonOutputLabel: 'ePrescription JSON',
+  pdfDraftHeading: 'Draft ePrescription JSON (not encoded)',
+  pdfDraftHint:
+    'Draft — the parsed prescription is shown for review; fix the listed errors to enable the CHMED16A output.',
+  pdfDraftStatus: 'Draft only: the extracted prescription is not valid, so no CHMED16A output was produced.',
   pdfQrEmpty: 'Extract a prescription to see its QR code.',
 
   /* ── icon accessible names (for aria-label on button wrappers) ── */
