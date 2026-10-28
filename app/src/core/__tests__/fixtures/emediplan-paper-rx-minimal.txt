@@ -1,0 +1,10 @@
+Der Schweizer Medikationsplan
+
+Patient
+Max Beispiel
+Born on: 01.01.1970 (M)
+
+Issue date: 28.10.2026
+
+Medication | Morning (08:00) | Noon (12:00) | Evening (18:00) | Night (22:00) | Quantity | From | Up to and including | Instructions | Reason | Prescribed by | Reserve medication
+Paracetamol 500 mg | 1 | 1 | 0 | 0 | Tablet | 28.10.2026 | 31.10.2026 | | |

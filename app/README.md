@@ -3,9 +3,9 @@
 > **Development and testing tool only — not a certified medical device, not for clinical use.**
 > Everything runs in your browser; no document is ever uploaded.
 
-A static, client-side-only validator, encoder, decoder and QR tool for CHMED16A eMediplan
-documents. It is a vanilla TypeScript + Vite single-page app: no backend, no install, and ready
-to publish on GitHub Pages at the project base path `/Chmed16ATools/`.
+A static, client-side-only validator, encoder, decoder, QR tool and PDF importer for CHMED16A
+eMediplan documents. It is a vanilla TypeScript + Vite single-page app: no backend, no install, and
+ready to publish on GitHub Pages at the project base path `/Chmed16ATools/`.
 
 ## What it is
 
@@ -13,14 +13,17 @@ The tool works on the `CHMED16A{Compression}{Data}` transmission format defined 
 `ig-emediplan/specification`. It understands both the compressed (`CHMED16A1…`, standard
 Base64 of gzipped JSON) and uncompressed (`CHMED16A0…`, plain JSON) variants, validates the
 decoded document against a hand-written, spec-tolerant JSON Schema, and round-trips it back to
-a CHMED string and a QR code.
+a CHMED string and a QR code. A printed eMediplan prescription PDF can also be imported and
+turned into the same JSON, string and QR.
 
-Two tabs cover the whole workflow:
+Three tabs cover the whole workflow:
 
 1. **JSON → CHMED16A** — validate a plan, encode it, copy/download the string and preview its
    QR code.
 2. **CHMED16A → JSON** — type or paste a string, upload a QR image, or (optionally) scan with
    the camera, then read, copy or download the pretty-printed JSON.
+3. **PDF → CHMED16A** — upload a printed eMediplan prescription PDF, extract its medication
+   block, and get the validated ePrescription JSON, the `CHMED16A1…` string and a QR preview.
 
 ## Features
 
@@ -37,8 +40,16 @@ Two tabs cover the whole workflow:
 - **Scan QR** — decode an uploaded PNG/JPEG (or any image the browser can read), or scan live
   with `getUserMedia`; a successful scan fills the input and decodes immediately. The camera
   only starts on an explicit button press and stops on tab switch or page hide.
+- **Import PDF** — upload a printed eMediplan paper-layout prescription, parse its patient,
+  provider and medication columns, then validate, encode and preview the result. The
+  prescription is always `MedType` 3 (Rx) at revision 3, with `HcPerson`/`HcOrg` filled from the
+  provider block when the PDF states them.
+- **OCR fallback** — PDFs with a text layer are parsed directly, without OCR. Scanned or
+  image-only PDFs are recognized in the browser by a bundled tesseract.js worker (English +
+  German traineddata), page by page; OCR-derived text is reported with a low-confidence warning
+  so it is never mistaken for a clean text extraction.
 
-Both tabs are keyboard-operable, use labelled controls with live regions for results, and keep
+All three tabs are keyboard-operable, use labelled controls with live regions for results, and keep
 all UI text in `src/ui/strings.ts` so a later Italian localization only touches one file.
 
 ## Quick start
@@ -73,15 +84,25 @@ own GitHub remote — this checkout's `origin` still points at the upstream
   bundle of HTML, CSS and JavaScript.
 - **No telemetry and no analytics.** No third-party scripts, pixels or error reporting.
 - **No persistence.** Documents live in the form fields for the lifetime of the page; nothing is
-  written to `localStorage`, `sessionStorage`, IndexedDB or cookies.
-- **Data never leaves the browser.** Encoding, decoding, validation and QR generation are pure
-  in-browser computation; uploaded QR images are read locally with `createImageBitmap` and never
-  transmitted. Clipboard and download use browser-local APIs only.
+  written to `localStorage`, `sessionStorage`, IndexedDB or cookies. PDFs are read into memory and
+  discarded when the page is closed.
+- **Data never leaves the browser.** Encoding, decoding, validation, QR generation, PDF parsing and
+  OCR are in-browser computation; uploaded QR images are read locally with `createImageBitmap`,
+  PDF bytes never leave the page, and nothing is transmitted. Clipboard and download use
+  browser-local APIs only.
+- **The OCR engine is bundled, not fetched.** The tesseract.js worker, the LSTM WASM cores and the
+  English/German traineddata are shipped under `public/tesseract/`, and Vite builds the pdf.js
+  worker into the app's own asset directory. The libraries' default CDN endpoints are overridden and
+  language caching is disabled, so recognizing a scanned PDF performs no external request.
 - **Camera needs HTTPS.** `getUserMedia` is only available in a secure context; GitHub Pages
   serves over HTTPS, so scanning works there. On `http://localhost` it also works. Image upload
   is always available as the fallback and requires no permission.
-- After the first load the app works fully offline: it loads only its own bundled assets and
-  system fonts, with no external requests.
+- **Findings may quote input.** A finding can echo a short clipped fragment of PDF- or OCR-derived
+  text (for example an unreadable date); it is rendered as text only, never as markup. The page
+  shell (Lucide icons and the Inter web font) is loaded from a CDN, while the PDF/OCR pipeline
+  itself is fully offline.
+- After the shell assets have loaded the app works fully offline: it then loads only its own bundled
+  assets and system fonts, with no further external requests.
 
 ## Limits and assumptions
 
@@ -105,6 +126,21 @@ own GitHub remote — this checkout's `origin` still points at the upstream
   differ from common tool defaults, so only the *decoded JSON* is guaranteed to round-trip.
   Do not expect byte-identical Base64 across tools; the app never compares or emits Base64 as a
   canonical value.
+- **PDF import targets one layout.** Only the printed eMediplan paper layout documented in
+  `chmed16a/README.md` (patient/provider blocks and the medication columns) is understood.
+  Free-form doctor letters, other generators' layouts and multi-prescription pages are out of
+  scope and fail with a parse finding ("no eMediplan prescription was found") instead of a guess.
+- **PDF work is bounded.** Files larger than 25 MB are refused before they are read, at most 200
+  pages are accepted for text extraction, at most 20 pages are rasterized and OCR'd, and the
+  accumulated text is capped (2 MiB characters, 50 000 text items per page); larger documents fail
+  closed rather than locking the tab.
+- **OCR is a lower-confidence path.** OCR text can misread digits, decimal separators and
+  fractions, so a result obtained through OCR is flagged with a low-confidence warning. Always
+  compare it against the paper original before trusting the encoded string.
+- **OCR languages are fixed at build time.** The bundle ships English and German traineddata
+  (`eng+deu`, the default); requests for other languages are rejected rather than downloaded.
+- **Password-protected and corrupt PDFs fail closed.** The app reports a clean finding for an
+  unreadable, encrypted or truncated PDF; it never throws and never emits a partial prescription.
 - Smaller assumptions: `D` (doses) has 0–4 entries in morning/noon/evening/night order; Base64
   uses standard padding on encode and tolerates missing/extra padding and surrounding whitespace
   on decode; the sub-version letter is case-insensitive on parse and uppercased on serialize;
@@ -131,9 +167,11 @@ The specification text and examples this tool implements come from
 [`ig-emediplan/specification`](https://github.com/ig-emediplan/specification), which is released
 under the MIT license; that license is respected, and the code cites the relevant specification
 anchors next to each rule. **No proprietary DLL or vendor code was copied or decompiled** — the
-encoder, decoder, validator and QR handling are an independent TypeScript implementation written
-from the published specification, using the bundled open-source libraries `pako`, `ajv`, `jsqr`
-and `qrcode-generator`.
+encoder, decoder, validator, PDF importer and QR handling are an independent TypeScript
+implementation written from the published specification, using the bundled open-source libraries
+`pako`, `ajv`, `jsqr`, `qrcode-generator`, `pdfjs-dist` (Apache-2.0) and `tesseract.js`
+(Apache-2.0, with MIT English/German traineddata). The dependency and derogation record lives in
+[`docs/TECH_DECISIONS.md`](../docs/TECH_DECISIONS.md).
 
 ## Disclaimer
 

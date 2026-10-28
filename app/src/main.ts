@@ -2,11 +2,13 @@ import './ui/styles.css';
 
 import { mountChmedToJson } from './ui/panel-chmed-to-json';
 import { mountJsonToChmed } from './ui/panel-json-to-chmed';
+import { mountPdfToChmed } from './ui/panel-pdf-to-chmed';
 import { text } from './ui/strings';
 import { createTabs } from './ui/tabs';
 
 const TAB_JSON_TO_CHMED = 'json-to-chmed';
 const TAB_CHMED_TO_JSON = 'chmed-to-json';
+const TAB_PDF_TO_CHMED = 'pdf-to-chmed';
 
 function byId(id: string): HTMLElement {
   const element = document.getElementById(id);
@@ -39,9 +41,11 @@ setText('app-disclaimer', text('disclaimer'));
 const tablist = byId('tablist');
 const jsonToChmedPanel = byId('panel-json-to-chmed');
 const chmedToJsonPanel = byId('panel-chmed-to-json');
+const pdfToChmedPanel = byId('panel-pdf-to-chmed');
 
 const jsonToChmed = mountJsonToChmed(jsonToChmedPanel);
 const chmedToJson = mountChmedToJson(chmedToJsonPanel);
+const pdfToChmed = mountPdfToChmed(pdfToChmedPanel);
 
 refreshIcons();
 
@@ -51,13 +55,18 @@ createTabs({
   tabs: [
     { id: TAB_JSON_TO_CHMED, label: text('tabJsonToChmed'), panel: jsonToChmedPanel },
     { id: TAB_CHMED_TO_JSON, label: text('tabChmedToJson'), panel: chmedToJsonPanel },
+    { id: TAB_PDF_TO_CHMED, label: text('tabPdfToChmed'), panel: pdfToChmedPanel },
   ],
   onSelect: (id) => {
     refreshIcons();
-    if (id === TAB_JSON_TO_CHMED) {
-      chmedToJson.dispose();
-    } else {
+    if (id !== TAB_JSON_TO_CHMED) {
       jsonToChmed.dispose();
+    }
+    if (id !== TAB_CHMED_TO_JSON) {
+      chmedToJson.dispose();
+    }
+    if (id !== TAB_PDF_TO_CHMED) {
+      pdfToChmed.dispose();
     }
   },
 });
@@ -65,4 +74,5 @@ createTabs({
 window.addEventListener('pagehide', () => {
   jsonToChmed.dispose();
   chmedToJson.dispose();
+  pdfToChmed.dispose();
 });

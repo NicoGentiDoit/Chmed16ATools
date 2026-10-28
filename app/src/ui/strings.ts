@@ -20,6 +20,7 @@ export const STRINGS = {
   tablistLabel: 'Tool mode',
   tabJsonToChmed: 'JSON → CHMED16A',
   tabChmedToJson: 'CHMED16A → JSON',
+  tabPdfToChmed: 'PDF → CHMED16A',
 
   jsonInputLabel: 'CHMED16A JSON document',
   jsonInputHint:
@@ -87,6 +88,31 @@ export const STRINGS = {
   jsonOutputHint: 'Read-only, pretty-printed JSON.',
   copyJsonAccessibleName: 'Copy decoded JSON document',
   downloadJsonAccessibleName: 'Download decoded JSON document as a .json file',
+
+  pdfFileLabel: 'eMediplan PDF document',
+  pdfFileHint:
+    'Printed eMediplan paper layout. Text-based PDFs are read directly; scanned PDFs are recognized offline, page by page.',
+  pdfProcess: 'Process PDF',
+  pdfIdle: 'Choose a PDF file to extract its ePrescription.',
+  pdfProcessing:
+    'Reading the PDF. Scanned documents are recognized offline and may take a while.',
+  pdfSuccess: 'Prescription extracted from {pages} page(s).',
+  pdfFindingsHeading: 'Extraction results',
+  pdfSuccessTextLayer: 'Text read directly from the PDF text layer ({pages} page(s)).',
+  pdfSuccessOcr: 'Text recognized from {pages} scanned page(s) with offline OCR.',
+  pdfSuccessValidated: 'The extracted prescription is valid and was encoded successfully.',
+  pdfStageExtract: 'The PDF could not be read.',
+  pdfStageOcr: 'The scanned pages could not be recognized.',
+  pdfStageParse: 'No eMediplan prescription was found in the text.',
+  pdfStageValidate: 'The extracted prescription is not valid.',
+  pdfStageEncode: 'The prescription could not be encoded.',
+  pdfUnexpected: 'The PDF could not be processed.',
+  pdfReadFailed: 'The selected file could not be read.',
+  pdfFileTooLarge:
+    'The selected PDF is larger than 25 MB. Choose a smaller file.',
+  pdfJsonOutputHeading: 'Extracted ePrescription JSON',
+  pdfJsonOutputLabel: 'ePrescription JSON',
+  pdfQrEmpty: 'Extract a prescription to see its QR code.',
 
   /* ── icon accessible names (for aria-label on button wrappers) ── */
   iconCheckLabel: 'Success',

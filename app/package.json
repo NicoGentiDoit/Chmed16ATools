@@ -12,6 +12,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@tesseract.js-data/deu": "1.0.0",
+    "@tesseract.js-data/eng": "1.0.0",
     "@types/pako": "^2.0.4",
     "eslint": "^10.13.0",
     "globals": "^17.13.0",
@@ -24,6 +26,8 @@
     "ajv": "^8.20.0",
     "jsqr": "^1.4.0",
     "pako": "^3.0.3",
-    "qrcode-generator": "^2.0.4"
+    "pdfjs-dist": "6.4.299",
+    "qrcode-generator": "^2.0.4",
+    "tesseract.js": "7.0.0"
   }
 }

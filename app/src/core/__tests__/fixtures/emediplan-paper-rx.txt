@@ -1,0 +1,20 @@
+Der Schweizer Medikationsplan
+
+Patient
+Hans Müller
+Born on: 14.03.1962 (M)
+Rosenweg 5, 3000 Bern / +41 79 123 45 67
+
+Service provider
+Created by: Dr. med. Anna Muster
+Organisation: Praxis Muster
+Street: Bahnhofstrasse 12
+Zip: 8001
+City: Zürich
+GLN: 7601000123456
+
+Issue date: 27.10.2026 09:15
+
+Medication | Morning (08:00) | Noon (12:00) | Evening (18:00) | Night (22:00) | Quantity | From | Up to and including | Instructions | Reason | Prescribed by | Reserve medication
+Ramipril 5 mg | 1 | 0 | ½ | 0 | Tablet | 01.10.2026 | 31.10.2026 | After a meal | Hypertension | Dr. med. Anna Muster |
+Metformin 500 mg | 0 | 1 | 0 | 1 | Tablet | 15.09.2026 | | With meals | Diabetes | Dr. med. Anna Muster |
