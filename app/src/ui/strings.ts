@@ -36,6 +36,9 @@ export const STRINGS = {
   notValidated: 'Not checked yet.',
   emptyInput: 'Enter a document first.',
   analysisFailed: 'The document could not be analyzed.',
+  clear: 'Clear',
+  clearInputAccessibleName: 'Clear the input document',
+  clearOutputAccessibleName: 'Clear the output result',
 
   chmedOutputHeading: 'Encoded CHMED16A string',
   chmedOutputLabel: 'CHMED16A string',

@@ -345,6 +345,10 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
 
   const inputActions = el('div', 'actions');
   inputSection.append(inputActions);
+  const clearInputButton = createButtonWithIcon(inputActions, text('clear'), 'eraser', {
+    className: 'secondary',
+    accessibleName: text('clearInputAccessibleName'),
+  });
   const validateButton = createButtonWithIcon(inputActions, text('validateJson'), 'check-circle', {
     className: 'secondary',
   });
@@ -368,6 +372,10 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
 
   const outputActions = el('div', 'actions');
   outputSection.append(outputActions);
+  const clearOutputButton = createButtonWithIcon(outputActions, text('clear'), 'eraser', {
+    className: 'secondary',
+    accessibleName: text('clearOutputAccessibleName'),
+  });
   const copyButton = createButtonWithIcon(outputActions, text('copy'), 'copy', {
     className: 'secondary',
     accessibleName: text('copyChmedAccessibleName'),
@@ -555,6 +563,18 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
     }
     outputStatus.textContent = downloadQrPng(lastMatrix) ? '' : text('qrPngFailed');
   });
+
+  clearInputButton.addEventListener('click', () => {
+    jsonInput.value = '';
+    // Back to the first-load view: nothing validated, nothing encoded. The
+    // input listener re-enables Encode as soon as a document is typed again.
+    encodeButton.disabled = true;
+    findings.message(text('notValidated'));
+    resetOutput();
+  });
+
+  // Same path the panel already uses for an empty or invalid document.
+  clearOutputButton.addEventListener('click', resetOutput);
 
   findings.message(text('notValidated'));
   renderQr();

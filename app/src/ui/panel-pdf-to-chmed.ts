@@ -53,7 +53,7 @@ import type { QrEcLevel } from '../core/qr-generate';
 import { format, text } from './strings';
 
 /** Icons this panel uses; the closed union keeps arbitrary markup out. */
-type PanelIconName = 'upload' | 'search' | 'copy' | 'download';
+type PanelIconName = 'upload' | 'search' | 'copy' | 'download' | 'eraser';
 
 /** Lucide icon name → inline SVG string. */
 function svg(name: PanelIconName): string {
@@ -435,6 +435,10 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
 
   const jsonActions = el('div', 'actions');
   jsonSection.append(jsonActions);
+  const jsonClearButton = createButtonWithIcon(jsonActions, text('clear'), 'eraser', {
+    className: 'secondary',
+    accessibleName: text('clearOutputAccessibleName'),
+  });
   const jsonCopyButton = createButtonWithIcon(jsonActions, text('copy'), 'copy', {
     className: 'secondary',
     accessibleName: text('copyJsonAccessibleName'),
@@ -466,6 +470,10 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
 
   const chmedActions = el('div', 'actions');
   chmedSection.append(chmedActions);
+  const chmedClearButton = createButtonWithIcon(chmedActions, text('clear'), 'eraser', {
+    className: 'secondary',
+    accessibleName: text('clearOutputAccessibleName'),
+  });
   const chmedCopyButton = createButtonWithIcon(chmedActions, text('copy'), 'copy', {
     className: 'secondary',
     accessibleName: text('copyChmedAccessibleName'),
@@ -539,6 +547,10 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
   function syncControls(): void {
     fileInput.disabled = running;
     processButton.disabled = running || currentBytes === null;
+    // A clear during a run would be overwritten by the result that lands after
+    // it, so both clear buttons are unavailable while the pipeline works.
+    jsonClearButton.disabled = running;
+    chmedClearButton.disabled = running;
   }
 
   function readEcLevel(): QrEcLevel {
@@ -592,6 +604,20 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
     chmedStatus.textContent = '';
     setDraftMode(false);
     renderQr();
+  }
+
+  /**
+   * Returns the panel to its first-load state: no retained bytes, both output
+   * areas empty, every copy/download control disabled and no stale findings or
+   * status. Shared by the clear buttons and `dispose()`.
+   */
+  function resetPanel(): void {
+    currentBytes = null;
+    fileInput.value = '';
+    clearOutput();
+    syncControls();
+    findings.message(text('pdfIdle'));
+    setStatus('', '');
   }
 
   /**
@@ -736,6 +762,11 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
     downloadText(text('chmedFilename'), chmedOutput.value, 'text/plain;charset=utf-8');
   });
 
+  // Both text areas show the same pipeline result, so either clear button
+  // resets the whole panel through the shared `clearOutput()` path.
+  jsonClearButton.addEventListener('click', resetPanel);
+  chmedClearButton.addEventListener('click', resetPanel);
+
   findings.message(text('pdfIdle'));
   renderQr();
 
@@ -746,17 +777,10 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
       // worker is terminated by `runOcr`'s own `finally` when the call settles.
       generation += 1;
       running = false;
-      // Release the document: bytes, derived strings and both output areas.
-      currentBytes = null;
-      fileInput.value = '';
-      clearOutput();
       // `main.ts` mounts every panel once and only toggles `hidden`, so a
       // disposed panel must stay usable when its tab is selected again: back to
-      // the idle view, picker enabled, Process disabled because no bytes are
-      // loaded, and no stale findings/status from the previous visit.
-      syncControls();
-      findings.message(text('pdfIdle'));
-      setStatus(text('pdfIdle'), '');
+      // the idle view with no bytes, no output and no stale findings/status.
+      resetPanel();
     },
   };
 }

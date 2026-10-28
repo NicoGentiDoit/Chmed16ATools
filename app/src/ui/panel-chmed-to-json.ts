@@ -284,6 +284,10 @@ export function mountChmedToJson(container: HTMLElement): Panel {
 
   const decodeActions = el('div', 'actions');
   inputSection.append(decodeActions);
+  const clearInputButton = createButtonWithIcon(decodeActions, text('clear'), 'eraser', {
+    className: 'secondary',
+    accessibleName: text('clearInputAccessibleName'),
+  });
   const decodeButton = createButtonWithIcon(decodeActions, text('decodeToJson'), 'arrow-left-circle');
 
   const scanSection = el('section', 'panel-section');
@@ -348,6 +352,10 @@ export function mountChmedToJson(container: HTMLElement): Panel {
 
   const outputActions = el('div', 'actions');
   outputSection.append(outputActions);
+  const clearOutputButton = createButtonWithIcon(outputActions, text('clear'), 'eraser', {
+    className: 'secondary',
+    accessibleName: text('clearOutputAccessibleName'),
+  });
   const copyButton = createButtonWithIcon(outputActions, text('copy'), 'copy', {
     className: 'secondary',
     accessibleName: text('copyJsonAccessibleName'),
@@ -548,6 +556,19 @@ export function mountChmedToJson(container: HTMLElement): Panel {
   downloadButton.addEventListener('click', () => {
     downloadText(text('jsonFilename'), jsonOutput.value, 'application/json;charset=utf-8');
   });
+
+  clearInputButton.addEventListener('click', () => {
+    // Stop an active camera first: its scan loop would otherwise refill the
+    // field moments after it was emptied.
+    stopCameraUi();
+    chmedInput.value = '';
+    setScanStatus('', '');
+    findings.message(text('notValidated'));
+    clearOutput();
+  });
+
+  // Same path the panel already uses for an empty or undecodable document.
+  clearOutputButton.addEventListener('click', clearOutput);
 
   findings.message(text('notValidated'));
 
