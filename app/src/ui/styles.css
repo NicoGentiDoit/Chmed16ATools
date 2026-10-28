@@ -1,13 +1,22 @@
 /*
- * CHMED16A Tools — Swiss minimalism stylesheet.
+ * CHMED16A Tools — glassmorphism stylesheet.
  *
  * Design principles:
- *   • Flat, purposeful surfaces; no gradients or glow.
+ *   • Translucent glass shell chrome: the header, tablist and tabpanels are
+ *     semi-transparent surfaces with backdrop blur, floating over an animated
+ *     gradient-blob body layer (primary / accent blue hues only).
+ *   • Solid, opaque inner surfaces: form controls, findings, the QR plate and
+ *     the camera feed never take glass — legibility and semantics win.
+ *   • Blob motion is transform-only and disabled under prefers-reduced-motion;
+ *     backdrop blur is never animated.
+ *   • Progressive enhancement: solid surfaces render first, glass is layered on
+ *     inside @supports (backdrop-filter); layout is identical on both paths.
  *   • Strong typographic hierarchy via size / weight, not colour alone.
  *   • Success / error / warning always paired with an icon and text label so
  *     colour-blind users can distinguish every state.
- *   • Visible focus rings; respects prefers-reduced-motion.
- *   • Light mode first; dark mode via prefers-color-scheme.
+ *   • Visible focus rings on every interactive target; reduced-motion honoured.
+ *   • Light mode first; dark mode via prefers-color-scheme, with glass-scoped
+ *     text colours that keep contrast >= 4.5:1 on the blurred backdrop.
  *
  * No framework. Vite inlines this into the bundle.
  */
@@ -61,6 +70,25 @@
   --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08);
   --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.10);
 
+  /* ── glass surfaces + control surfaces ───────────────────────────────────── */
+  --color-control-bg: #ffffff;
+  --color-control-bg-muted: #f7fafc;
+  --color-glass-surface: rgba(255, 255, 255, 0.60);
+  --color-glass-surface-strong: rgba(255, 255, 255, 0.75);
+  --color-glass-border: rgba(15, 76, 129, 0.16);
+  --color-glass-shadow: 0 8px 32px rgba(15, 76, 129, 0.12);
+  /* Hover = frost deepens (+0.06 alpha) and the float shadow settles. Light
+     glass only ever gets lighter, so the delta is safe for dark text. */
+  --color-glass-surface-hover: rgba(255, 255, 255, 0.66);
+  --color-glass-shadow-hover: 0 12px 40px rgba(15, 76, 129, 0.16);
+  --blur-glass: 12px;
+  --radius-glass: 16px;
+
+  /* ── background blob layer (primary / accent blue hues only) ─────────────── */
+  --color-blob-primary: rgba(15, 76, 129, 0.30);
+  --color-blob-accent: rgba(91, 155, 213, 0.32);
+  --color-blob-neutral: rgba(200, 186, 160, 0.22);
+
   /* ── type ────────────────────────────────────────────────────────────────── */
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -81,6 +109,8 @@
     --color-elevation: #1c2128;
 
     --color-accent: #5b9bd5;
+    /* dark ink on the #5b9bd5 accent: white-on-accent is only ≈3:1 */
+    --color-on-primary: #0a1628;
 
     --color-success: #3fb950;
     --color-success-bg: #0d2818;
@@ -88,6 +118,32 @@
     --color-warning-bg: #2a1e00;
     --color-error: #ff6b6b;
     --color-error-bg: #2a0a0a;
+
+    /* glass / control surfaces — translucent tint over the dark canvas */
+    --color-control-bg: #0d1117;
+    --color-control-bg-muted: #11161d;
+    --color-glass-surface: rgba(230, 237, 243, 0.16);
+    /* 0.20 (not 0.26): the selected tab stacks a second tint on top of the
+       tablist glass, and 0.26 pushed the label to ~3.5:1. 0.20 + white text
+       keeps the selected label at ~4.8:1 worst case. */
+    --color-glass-surface-strong: rgba(230, 237, 243, 0.20);
+    --color-glass-border: rgba(230, 237, 243, 0.20);
+    --color-glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+    /* Hover frost is +0.02 here, not the light path's +0.06: light text on a
+       lighter plate loses contrast, and the measured worst-case backdrop
+       (#43576a, blob peak behind the glass) has only ~0.2 alpha of headroom.
+       0.18 keeps muted text at ~4.6:1; 0.22 would drop it to ~4.1:1. */
+    --color-glass-surface-hover: rgba(230, 237, 243, 0.18);
+    --color-glass-shadow-hover: 0 12px 40px rgba(0, 0, 0, 0.50);
+
+    /* Focus ring: #1565c0 measures ~1.3:1 on dark glass, so dark mode uses a
+       light blue that clears 3:1 on every dark surface (3.1:1 on strong glass). */
+    --color-ring: #a5d6ff;
+
+    /* background blob layer (primary / accent blue hues only) */
+    --color-blob-primary: rgba(43, 108, 176, 0.38);
+    --color-blob-accent: rgba(91, 155, 213, 0.30);
+    --color-blob-neutral: rgba(170, 152, 120, 0.18);
   }
 }
 
@@ -108,7 +164,7 @@ html {
 
 body {
   margin: 0;
-  background: var(--color-bg);
+  background-color: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-sans);
   font-size: 0.9375rem;
@@ -132,6 +188,46 @@ body {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
+   Background layer — animated gradient blobs
+   Fixed pseudo paints above the canvas background propagated from <body> and
+   below all content. Blur lives on the layer, never animated; the keyframes move
+   the layer with transforms only (compositor-friendly).
+   ───────────────────────────────────────────────────────────────────────────── */
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  contain: layout paint style;
+  background-image:
+    radial-gradient(circle 55vmax at 15% 8%, var(--color-blob-primary) 0%, transparent 62%),
+    radial-gradient(circle 45vmax at 85% 26%, var(--color-blob-accent) 0%, transparent 60%),
+    radial-gradient(circle 50vmax at 52% 92%, var(--color-blob-neutral) 0%, transparent 60%);
+  background-repeat: no-repeat;
+  filter: blur(40px);
+  transform: translate3d(0, 0, 0);
+  animation: blob-drift 24s ease-in-out infinite alternate;
+}
+
+@keyframes blob-drift {
+  0% {
+    transform: translate3d(-2%, -1%, 0) scale(1);
+  }
+  100% {
+    transform: translate3d(2%, 1%, 0) scale(1.05);
+  }
+}
+
+/* Explicit opt-out on top of the global kill-switch below */
+@media (prefers-reduced-motion: reduce) {
+  body::before {
+    animation: none;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
    App shell
    ───────────────────────────────────────────────────────────────────────────── */
 
@@ -149,9 +245,74 @@ body {
    Header
    ───────────────────────────────────────────────────────────────────────────── */
 
+/* Solid base shell: fully readable with no backdrop-filter support.
+   The @supports block below layers the glass treatment on top.
+   `position: relative` + `isolation: isolate` give the ambient sweep pseudo a
+   stacking context of its own, so its negative z-index paints above this
+   plate's fill but below the copy. `overflow: clip` confines that sweep to the
+   plate: nothing in the header is positioned or overflows the padding box
+   (`h1::before` is an in-flow inline-block), and an element's own `box-shadow`
+   is not clipped by its overflow, so the float shadow still paints. `clip`
+   (not `hidden`) creates no scroll container. */
 .app-header {
-  border-bottom: 1px solid var(--color-border);
-  padding-bottom: var(--space-lg);
+  position: relative;
+  overflow: clip;
+  isolation: isolate;
+  padding: var(--space-lg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-glass);
+  background: var(--color-elevation);
+  transition: background-color 400ms ease, box-shadow 400ms ease;
+}
+
+/* Ambient specular sweep: one slow glint crossing the header plate. A 45%-wide
+   skewed gradient band translates from outside the left edge to outside the
+   right edge on a 30s linear loop; it paints under the copy (z-index -1) and is
+   clipped to the plate by the header's overflow. Transform-only, so the
+   compositor owns it — no filter or backdrop-filter is touched, and no
+   permanent `will-change` layer is left behind (the running animation promotes
+   the band itself). The white stops are a light artefact, not a surface
+   colour, hence no token; effective peak paint is 0.06 × 0.55 ≈ 3% white, so
+   text contrast is unaffected even over the worst-case blob backdrop. */
+.app-header::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 45%;
+  border-radius: inherit;
+  background: linear-gradient(
+    105deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.55) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  opacity: 0.06;
+  transform: translate3d(-140%, 0, 0) skewX(-15deg);
+  pointer-events: none;
+  animation: header-sheen 30s linear infinite;
+}
+
+@keyframes header-sheen {
+  from {
+    transform: translate3d(-140%, 0, 0) skewX(-15deg);
+  }
+  to {
+    transform: translate3d(360%, 0, 0) skewX(-15deg);
+  }
+}
+
+/* The sweep is pure decoration, so reduced motion removes the layer outright
+   (a stopped loop would otherwise park the band mid-plate). Declared after the
+   animation above: equal specificity means the later rule must be the one that
+   wins. */
+@media (prefers-reduced-motion: reduce) {
+  .app-header::after {
+    animation: none;
+    display: none;
+  }
 }
 
 .app-header h1 {
@@ -163,12 +324,13 @@ body {
 }
 
 .app-header h1::before {
-  /* small blue square accent, Swiss-grid style */
+  /* small blue square accent; accent token (light #0f4c81, dark #5b9bd5) so the
+     mark stays visible on dark glass */
   content: '';
   display: inline-block;
   width: 0.35em;
   height: 0.35em;
-  background: var(--color-primary);
+  background: var(--color-accent);
   border-radius: var(--radius-sm);
   vertical-align: middle;
   margin-right: 0.4em;
@@ -212,40 +374,110 @@ body {
   gap: 0;
 }
 
+/* Fully rounded floating plate. No `overflow` rule here on purpose: nothing
+   protrudes past the plate — the chips are inset from the border on all four
+   sides — so there is nothing to clip and no reason to risk it.
+
+   Junction geometry (why full rounding, not a joined-card bridge):
+   `.app-tabs` is a 0-gap column, but `.tabpanels` adds 24px (--space-lg) of
+   padding-top, so 24px of page shows between the tablist's bottom border and
+   the tabpanel's top border. That is a gap, not a seam: the panel's 16px top
+   corners cannot "receive" the tablist's bottom corners, and square bottom
+   corners on the tablist read as two hard edges of their own. Both plates
+   therefore carry --radius-glass on all four corners.
+
+   Inline padding is 16px (--space-md) so the chip corners clear the plate's
+   corner arcs: 1px border + 16px padding puts the first/last chip 17px from
+   the outer edge, i.e. past the 16px bottom-corner arc, so a chip's own 16px
+   bottom arc can never cross the plate's curve.
+
+   Bottom padding is 2px, not 0: that is the breathing inset which keeps the
+   chip's own 1px bottom border visually separate from the tablist's 1px
+   straight seam line. The seam is no longer bridged or covered by the
+   selected chip — it runs continuously under every chip. */
 .tablist {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-xs);
-  padding-bottom: 0;
-  border-bottom: 2px solid var(--color-border);
+  /* Gap equals the inline padding (--space-md, 16px) so the rhythm is even:
+     the space between two chips (16px) matches the space from the plate's
+     inner border to a chip (16px), i.e. 17px from the outer edge once the 1px
+     border is counted — a 1px difference the eye reads as equal. The earlier
+     --space-xs (4px) gap made the side margins look four times the chip gap.
+     Only the distance *between* chips changes: the first/last chip keep their
+     17px inset, so the corner-arc clearance described above is untouched. */
+  gap: var(--space-md);
+  padding: var(--space-xs) var(--space-md) 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-glass);
+  background: var(--color-elevation);
+  /* Hover frost/shadow only; the chip cross-fade below is separate. */
+  transition: background-color 400ms ease, box-shadow 400ms ease;
 }
 
 .tab {
   padding: 0.625rem 1.125rem;
   border: 1px solid transparent;
-  border-bottom: 2px solid transparent;
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  /* Fully rounded chip on all four corners: the same 16px silhouette as the
+     tablist, header and panels, so idle, hover and selected never disagree on
+     geometry (a smaller idle chip next to a 16px selected plate made the
+     hover→selected handoff look like a radius jump). Square bottom corners
+     only ever existed to bridge the tablist's 1px bottom border; a flush
+     square edge under a rounded plate leaves curved cutouts, so the chip is
+     rounded all round and the seam line simply stays visible beneath it. */
+  border-radius: var(--radius-glass);
   background: transparent;
   color: var(--color-text-muted);
   font: inherit;
   font-weight: 500;
   font-size: 0.9375rem;
   cursor: pointer;
-  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+  /* Chip state cross-fade. Explicit property list, no `all`. `border-radius`
+     is deliberately absent: chip geometry snaps by design decision (round
+     2d) so idle/hover/selected can never disagree mid-transition. End values
+     are untouched — only the timing changed (150 → 180ms) — so the selected
+     chip's opaque composite and its verified 8.8:1 / 9.0:1 label contrast
+     hold. */
+  transition:
+    color 180ms ease,
+    background-color 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease;
 }
 
+/* Solid surface wash (readable in both colour schemes); never glass on the
+   buttons themselves — nested backdrop-filters are a repaint trap.
+   No radius declaration: the wash inherits `.tab`'s --radius-glass, so base,
+   hover and selected geometry cannot drift apart. */
 .tab:hover {
   color: var(--color-text);
   background: var(--color-surface);
 }
 
 .tab[aria-selected='true'] {
-  border-color: var(--color-accent);
-  border-bottom-color: var(--color-bg);
+  border-color: var(--color-border);
+  /* Fully rounded opaque chip, 16px on every corner to match the .tablist
+     plate (--radius-glass); 16px on a 44px-tall tab (2.75rem) is a 0.36
+     ratio, so the arc stays a corner, not a pill. The bottom corners round
+     like the top ones — the 1px bottom border is *not* covered, it stays the
+     tablist's continuous straight seam line under the chip. Nothing paints
+     outside this box's rounded outline, so no negative margin and no
+     overflow rule are involved.
+     Padding clears the arc: 18px inline (12px at the 375px breakpoint) vs a
+     corner inset of only ~1.6px at the text's cap line. */
+  border-radius: var(--radius-glass);
   color: var(--color-accent);
   font-weight: 600;
-  background: var(--color-bg);
-  margin-bottom: -2px; /* bridge the gap under the bottom border */
+  background: var(--color-elevation);
+}
+
+/* Dark mode only: the accent blue on an elevated/glass surface sits near 2.5:1,
+   so the selected label uses full-strength white on the strong glass tint
+   (~4.8:1 worst case; surface + weight + border already signal selection).
+   Light mode keeps the accent label at ~8:1. */
+@media (prefers-color-scheme: dark) {
+  .tab[aria-selected='true'] {
+    color: #ffffff;
+  }
 }
 
 .tab:focus-visible {
@@ -253,8 +485,43 @@ body {
   outline-offset: -2px;
 }
 
+/* 24px of page between the tablist and the panel: the two glass plates are
+   separate cards, not a joined tab-sheet, so neither side borrows the other's
+   corner treatment. */
 .tabpanels {
   padding-top: var(--space-lg);
+}
+
+.tabpanel {
+  padding: var(--space-lg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-glass);
+  background: var(--color-elevation);
+  /* Frost deepens and the float shadow settles on hover (values live in the
+     @supports block); opacity/transform carry the tab-switch entrance.
+     `backdrop-filter` is absent on purpose: re-blurring the backdrop every
+     frame is the expensive path, so the blur radius stays pinned at
+     --blur-glass and only cheap properties move. */
+  transition:
+    background-color 400ms ease,
+    box-shadow 400ms ease,
+    opacity 350ms ease-out,
+    transform 350ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Tab-switch entrance: `hidden` toggles `display: none` (see [hidden] above),
+   so removing the attribute is the first style update of the newly rendered
+   panel and `@starting-style` supplies the beginning of the transition. Naming
+   `display` in the transition list with `allow-discrete` is not needed here and
+   would delay the outgoing panel's hide — only the entrance is animated.
+   Browsers without `@starting-style` (Chromium < 117, Safari < 17.5) render the
+   panel resolved: progressive, no polyfill. The initially visible panel
+   resolves once on load, which is accepted. */
+@starting-style {
+  .tabpanel:not([hidden]) {
+    opacity: 0;
+    transform: translateY(16px);
+  }
 }
 
 .tabpanel h2 {
@@ -265,8 +532,133 @@ body {
   color: var(--color-text);
 }
 
+/* Panels are programmatically focusable after tab activation; they need a
+   visible ring like every other focus target. */
 .tabpanel:focus-visible {
-  outline: none;
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Glass surfaces — progressive enhancement
+   Everything above is the solid fallback. Only browsers that can actually blur
+   the body blob layer get translucency. The `or (-webkit-...)` arm covers
+   WebKit builds exposing just the prefixed property, so no second @supports
+   query is required; both properties are declared for the same reason.
+   The blob layer's pixels rasterize once, but its transform animation
+   re-triggers every glass backdrop blur each frame — that is a steady idle GPU
+   cost even when nothing on the page changes. `prefers-reduced-transparency`
+   (below) drops the blob layer and flattens the shells back to opaque.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .app-header,
+  .tablist,
+  .tabpanel {
+    background: var(--color-glass-surface);
+    -webkit-backdrop-filter: blur(var(--blur-glass));
+    backdrop-filter: blur(var(--blur-glass));
+    border: 1px solid var(--color-glass-border);
+    box-shadow: var(--color-glass-shadow);
+    border-radius: var(--radius-glass);
+  }
+
+  /* Hover frost: the plate thickens its tint and its float shadow settles
+     lower and softer. Only `background-color` and `box-shadow` change — both
+     cheap paints — and the blur radius stays pinned at --blur-glass for the
+     whole transition. No transform lift on any plate: three plates moving
+     under one pointer reads as decorative jitter, and the glass quality being
+     animated is frost + depth, not geometry. */
+  .app-header:hover,
+  .tablist:hover,
+  .tabpanel:hover {
+    background-color: var(--color-glass-surface-hover);
+    box-shadow: var(--color-glass-shadow-hover);
+  }
+
+  /* Tabs sit on the tablist's glass. The chips carry the plate's all-round
+     16px radius on every corner, and the 1px bottom border stays a continuous
+     straight seam line beneath them rather than a bridge they cover. */
+  .tablist {
+    border-radius: var(--radius-glass);
+    border-bottom: 1px solid var(--color-glass-border);
+  }
+
+  /* The strong tint alone is translucent, so the selected chip would otherwise
+     pick up whatever blurs behind the bar. Paint an opaque elevation base under
+     the identical strong tint: composite is #ffffff light / #444a51 dark, which
+     is exactly what the verified label contrast (8.8:1 / 9.0:1) is measured
+     against. */
+  .tab[aria-selected='true'] {
+    background-image: linear-gradient(
+      var(--color-glass-surface-strong),
+      var(--color-glass-surface-strong)
+    );
+    background-color: var(--color-elevation);
+    border-color: var(--color-glass-border);
+    /* Restate the chip silhouette on the glass path so the two rendering
+       paths cannot drift apart: 16px on all four corners, no bridge. */
+    border-radius: var(--radius-glass);
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Dark-mode contrast corrections for glass
+   The light glass tint lifts the dark canvas to a mid tone, so the muted text
+   token drops to ~2.4:1 on it (worst case: blob peak behind the glass ≈
+   #43576A). Scoping a lighter muted value to the glass shells keeps secondary
+   text at ~4.9:1 there; surfaces outside those shells keep the MASTER #8b949e.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+@media (prefers-color-scheme: dark) {
+  .app-header,
+  .tablist,
+  .tabpanel {
+    --color-text-muted: #c9d1d9;
+  }
+
+  /* Transparent secondary buttons sit straight on the panel glass, where the
+     accent label measures ~2.5:1. An opaque control plate restores ~6.4:1
+     without changing the primary/secondary hierarchy. */
+  button.secondary {
+    background: var(--color-control-bg);
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Reduced transparency — flatten the glass path
+   Users who ask for less transparency get the fallback rendering: no blob layer,
+   no backdrop blur, opaque shell plates. This also removes the per-frame blur
+   cost described above.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+@media (prefers-reduced-transparency: reduce) {
+  body::before {
+    display: none;
+  }
+
+  /* No frost to sweep across a flattened plate. */
+  .app-header::after {
+    display: none;
+  }
+
+  .app-header,
+  .tablist,
+  .tabpanel {
+    background: var(--color-elevation);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  /* The hover frost is a transparency change and would re-introduce a
+     translucent fill over the opaque plate (it outranks the rule above by
+     specificity), so it is pinned back to the flat fill. The hover shadow is
+     left alone — depth, not translucency. */
+  .app-header:hover,
+  .tablist:hover,
+  .tabpanel:hover {
+    background-color: var(--color-elevation);
+  }
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -313,9 +705,12 @@ body {
   padding: 0.625rem 0.75rem;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  background: var(--color-bg);
+  background: var(--color-control-bg);
   color: inherit;
   transition: border-color 150ms ease, box-shadow 150ms ease;
+  /* Controls are opaque on purpose: no glass may bleed into an input. */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .field-input {
@@ -326,7 +721,7 @@ body {
 }
 
 .field-input[readonly] {
-  background: var(--color-surface);
+  background: var(--color-control-bg-muted);
   color: var(--color-text-muted);
 }
 
@@ -337,11 +732,32 @@ body {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-ring) 22%, transparent);
 }
 
+/* Any native <select> that is not wrapped in .field-select still gets a
+   visible ring (the .field-select variant above uses the token shadow). */
+select:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
 .field-hint {
   margin: 0;
   color: var(--color-text-muted);
   font-size: 0.8125rem;
   line-height: 1.5;
+}
+
+/* Emphasised hint (PDF draft banner): opaque warning tint with the same 3px
+   semantic edge as findings, so it stays readable on the glass panel.
+   Contrast: warning on warning-bg ≈ 5.0:1 (light) / 6.5:1 (dark). */
+.draft-banner {
+  padding: var(--space-sm) var(--space-md);
+  border-left: 3px solid var(--color-warning);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  font-weight: 500;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .field-inline {
@@ -367,9 +783,24 @@ body {
 }
 
 button {
+  /* Centred label+icon cluster. inline-flex is shrink-to-fit, so when
+     `min-width` (44px) is the binding width — or when a parent flex row
+     stretches the button — the default `justify-content: flex-start` packs
+     the cluster to the leading edge and leaves all slack trailing. Both axes
+     must be declared: `text-align` alone is inert on flex items.
+     The icon is `<i data-lucide>` swapped for a <svg> at 1em; when the CDN is
+     unavailable the <i> stays empty and contributes 0 inline size but still
+     counts as a flex item, so the `gap` remains — centring the *cluster*
+     keeps the label centred to within half that 4px gap, and the label alone
+     still centres when the icon is absent. The svg's inline
+     `vertical-align: -0.125em` is ignored inside this flex container
+     (align-items governs), which is exactly what we want. */
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-xs);
+  text-align: center;
+  vertical-align: middle;
   padding: 0.5625rem 1rem;
   border: 1px solid var(--color-accent);
   border-radius: var(--radius-md);
@@ -379,7 +810,13 @@ button {
   font-weight: 600;
   font-size: 0.875rem;
   cursor: pointer;
-  transition: background 150ms ease, filter 150ms ease, transform 100ms ease;
+  /* Explicit list, no `all`. The press release uses a spring-ish curve so the
+     scale eases back instead of snapping; `background-color` keeps the
+     secondary button's hover wash smooth. */
+  transition:
+    background-color 150ms ease,
+    filter 150ms ease,
+    transform 100ms cubic-bezier(0.16, 1, 0.3, 1);
   min-height: 2.75rem; /* ≥ 44px touch target */
   min-width: 2.75rem;
 }
@@ -411,6 +848,20 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/* Icon slot when Lucide never loads (offline / CDN blocked): the <i> survives
+   with its helper's inline `width:1em;height:1em`, so as a blockified flex item
+   it reserves a 14px dead box — plus the 4px gap — ahead of the label, which
+   pushes the visually centred text ~9px right of the plate centre. That is the
+   off-centre the dark-mode screenshots show (icons absent). `display: none`
+   drops the box and therefore its gap contribution without touching the TS
+   helper and without !important: the inline style sets only width / height /
+   vertical-align / flex-shrink, none of which defeat `display`. A replaced
+   (or otherwise populated) <i> is no longer :empty, so a loaded icon keeps
+   its slot untouched. */
+button > i[data-lucide]:empty {
+  display: none;
+}
+
 /* ─────────────────────────────────────────────────────────────────────────────
    Findings / validation results
    ───────────────────────────────────────────────────────────────────────────── */
@@ -420,6 +871,9 @@ button:disabled {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface);
+  /* Semantic results stay opaque — never glass, now or later. */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .findings-summary {
@@ -463,6 +917,9 @@ button:disabled {
   background: var(--color-surface);
   font-size: 0.875rem;
   line-height: 1.6;
+  /* Opaque tinted plate + 3px semantic edge; glass must never leak in. */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .findings-list.is-error {
@@ -509,6 +966,9 @@ button:disabled {
   background: var(--color-elevation);
   box-shadow: var(--shadow-sm);
   margin-bottom: var(--space-sm);
+  /* The QR plate must stay fully opaque for reliable scanning. */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .qr-preview svg {
@@ -516,6 +976,8 @@ button:disabled {
   height: auto;
   background: var(--color-qr-bg);
   display: block;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .qr-status {
@@ -550,6 +1012,9 @@ button:disabled {
   border-radius: var(--radius-lg);
   background: var(--color-camera-bg);
   border: 1px solid var(--color-border);
+  /* Solid black plate both modes; no translucency under the video feed. */
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }
 
 .scan-status {

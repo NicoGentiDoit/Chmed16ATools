@@ -420,7 +420,7 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
    * prescription: it explains that the JSON below is a draft and that the
    * blocking findings must be fixed before anything is encoded.
    */
-  const draftHint = el('p', 'field-hint');
+  const draftHint = el('p', 'field-hint draft-banner');
   draftHint.textContent = text('pdfDraftHint');
   draftHint.hidden = true;
   jsonSection.append(draftHint);
