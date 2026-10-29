@@ -1,0 +1,5 @@
+# Asset OCR vendorizzati (~16 MB di JS/WASM): non sono codice applicativo.
+app/public/tesseract/
+
+# Bundle di build: duplicato di app/src, base path '/Chmed16ATools/'.
+/app/dist/
