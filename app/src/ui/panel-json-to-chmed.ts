@@ -12,19 +12,26 @@ import { generateQr, qrToSvg } from '../core/qr-generate';
 import type { QrEcLevel, QrMatrix } from '../core/qr-generate';
 import { NESTING_TOO_DEEP_MESSAGE, isNestingOverflow, validateJsonText } from '../core/validate';
 import type { ValidationError, ValidationResult, ValidationWarning } from '../core/validate';
-import { createButtonWithIcon } from './components/buttons';
+import { createButtonWithIcon, setButtonLabel } from './components/buttons';
 import { copyText, downloadText } from './components/clipboard';
 import { el } from './components/dom';
 import { createDropzone } from './components/dropzone';
 import type { DropRejection } from './components/dropzone';
-import { createTextareaField } from './components/fields';
+import { createTextareaField, setFieldLabels } from './components/fields';
 import { createFindingsView } from './components/findings';
 import type { Finding } from './components/findings';
 import { format, text } from './strings';
+import type { UiStringKey } from './strings';
 
 export interface Panel {
   /** Releases resources held by the panel. */
   dispose(): void;
+  /**
+   * Re-applies every label of the panel for the current locale without
+   * rebuilding it: typed input, encoded output, the QR symbol and every status
+   * message that describes a value are kept as they are.
+   */
+  refresh?(): void;
 }
 
 const EC_LEVELS: readonly QrEcLevel[] = ['L', 'M', 'Q', 'H'];
@@ -295,6 +302,25 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
   /** Module map of the symbol currently previewed, for the PNG export. */
   let lastMatrix: QrMatrix | null = null;
 
+  /**
+   * Key of the neutral message the findings view currently shows, or `null`
+   * when it shows findings. Kept so a locale change can re-issue the same
+   * message instead of leaving stale wording on screen.
+   */
+  let findingsMessageKey: UiStringKey | null = null;
+
+  /** Shows findings; a live message is stale by definition. */
+  function renderFindings(errors: readonly Finding[], warnings: readonly Finding[]): void {
+    findingsMessageKey = null;
+    findings.render(errors, warnings);
+  }
+
+  /** Shows one neutral message and remembers its key for the locale refresh. */
+  function showFindingsMessage(key: UiStringKey): void {
+    findingsMessageKey = key;
+    findings.message(text(key));
+  }
+
   function readEcLevel(): QrEcLevel {
     const value = ecSelect.value;
     return EC_LEVELS.find((level) => level === value) ?? DEFAULT_EC_LEVEL;
@@ -349,7 +375,7 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
   function runValidation(): void {
     const input = jsonInput.value;
     if (input.trim() === '') {
-      findings.message(text('emptyInput'));
+      showFindingsMessage('emptyInput');
       resetOutput();
       return;
     }
@@ -359,12 +385,12 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
     try {
       result = validateJsonText(input);
     } catch (error) {
-      findings.render([unexpectedFinding(error)], []);
+      renderFindings([unexpectedFinding(error)], []);
       encodeButton.disabled = true;
       resetOutput();
       return;
     }
-    findings.render(errorFindings(result.errors), warningFindings(result.warnings));
+    renderFindings(errorFindings(result.errors), warningFindings(result.warnings));
     encodeButton.disabled = result.errors.length > 0;
     if (!result.ok) {
       resetOutput();
@@ -389,7 +415,7 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
   encodeButton.addEventListener('click', () => {
     const input = jsonInput.value;
     if (input.trim() === '') {
-      findings.message(text('emptyInput'));
+      showFindingsMessage('emptyInput');
       resetOutput();
       return;
     }
@@ -397,19 +423,19 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
     try {
       result = jsonToChmed(input);
     } catch (error) {
-      findings.render([unexpectedFinding(error)], []);
+      renderFindings([unexpectedFinding(error)], []);
       encodeButton.disabled = true;
       resetOutput();
       return;
     }
     const warnings = warningFindings(result.warnings);
     if (!result.ok) {
-      findings.render(errorFindings(result.errors), warnings);
+      renderFindings(errorFindings(result.errors), warnings);
       encodeButton.disabled = true;
       resetOutput();
       return;
     }
-    findings.render([], warnings);
+    renderFindings([], warnings);
     lastChmed = result.chmed;
     chmedOutput.value = result.chmed;
     copyButton.disabled = false;
@@ -447,7 +473,7 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
     // Back to the first-load view: nothing validated, nothing encoded. The
     // input listener re-enables Encode as soon as a document is typed again.
     encodeButton.disabled = true;
-    findings.message(text('notValidated'));
+    showFindingsMessage('notValidated');
     dropzone.clearStatus();
     resetOutput();
   });
@@ -455,12 +481,53 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
   // Same path the panel already uses for an empty or invalid document.
   clearOutputButton.addEventListener('click', resetOutput);
 
-  findings.message(text('notValidated'));
+  showFindingsMessage('notValidated');
   renderQr();
+
+  /**
+   * Re-applies every label this panel owns from the current locale.
+   *
+   * Label-only by contract: the textarea values, the encoded string, the QR
+   * module map and the selected error-correction level are all kept. Labels
+   * painted by shared components are re-created through their own handles
+   * (`relabel`, `setFieldLabels`, `setButtonLabel`), and the QR status/info
+   * line is re-derived from `lastChmed` so its wording follows the locale.
+   * Transient outcome messages written with `textContent` (a copy confirmation,
+   * a drop rejection) are left alone: they describe an event, not a label.
+   */
+  function refreshLabels(): void {
+    heading.textContent = text('tabJsonToChmed');
+    setFieldLabels(jsonInput, { label: text('jsonInputLabel'), hint: text('jsonInputHint') });
+    dragHint.textContent = text('jsonInputDragHint');
+    setButtonLabel(clearInputButton, text('clear'), text('clearInputAccessibleName'));
+    setButtonLabel(validateButton, text('validateJson'));
+    setButtonLabel(encodeButton, text('encodeToChmed'));
+
+    findings.relabel(text('validationHeading'));
+    if (findingsMessageKey !== null) {
+      findings.message(text(findingsMessageKey));
+    }
+
+    outputHeading.textContent = text('chmedOutputHeading');
+    setFieldLabels(chmedOutput, {
+      label: text('chmedOutputLabel'),
+      hint: text('chmedOutputHint'),
+    });
+    setButtonLabel(clearOutputButton, text('clear'), text('clearOutputAccessibleName'));
+    setButtonLabel(copyButton, text('copy'), text('copyChmedAccessibleName'));
+    setButtonLabel(downloadButton, text('download'), text('downloadChmedAccessibleName'));
+    setButtonLabel(pngButton, text('downloadPng'), text('downloadPngAccessibleName'));
+
+    qrHeading.textContent = text('qrHeading');
+    ecLabel.textContent = text('qrEcLabel');
+    ecHint.textContent = text('qrEcHint');
+    renderQr();
+  }
 
   return {
     dispose: () => {
       // This tab holds no resources: nothing to release.
     },
+    refresh: refreshLabels,
   };
 }

@@ -298,6 +298,39 @@ button.brand:hover:not(:disabled) {
   white-space: nowrap;
 }
 
+/* Right-hand meta group of the brand bar: the build version and the language
+   selector. Grouped so the brand bar keeps a single left/right pair and both
+   items wrap together on narrow phones instead of separating. */
+.app-header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+/* Language selector (`<select>`, built by `components/language-selector.ts`).
+   Native control styled with the field tokens: `--color-text` on
+   `--color-control-bg` is 16.4:1 in light and 12.6:1 in dark, both far past the
+   4.5:1 minimum, and the ring is the token ring every other control uses.
+   `min-height` matches the buttons' 44px touch target; the control never takes
+   focus on load, it only receives it through the normal tab order. */
+.language-selector {
+  min-height: 2.75rem;
+  padding: 0.125rem var(--space-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-control-bg);
+  color: var(--color-text);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.language-selector:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
 /* ─────────────────────────────────────────────────────────────────────────────
    Skip link — off-screen until focused, then a real, visible target
    ───────────────────────────────────────────────────────────────────────────── */

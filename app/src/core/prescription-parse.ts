@@ -215,17 +215,104 @@ import type {
 } from './types';
 import type { ValidationWarning } from './validate';
 
+/**
+ * Values a localized finding template interpolates (i18n plan 007, phase 8).
+ *
+ * Only values the document itself printed are ever passed here: a template
+ * echoes them inside quotes, it never re-words them. Bounding (`clip`) and
+ * escaping stay with the core and the renderer that already owned them.
+ */
+export type ParseFindingParams = Readonly<Record<string, string | number>>;
+
+/**
+ * Stable sub-code of a blocking parse finding.
+ *
+ * `code` stays the coarse taxonomy the UI narrows on (`unsupported-layout`
+ * decides the stage headline, `invalid-value` vs `missing-field` the wording);
+ * the detail names the exact message so the UI can localize it without reading
+ * the English prose. One code covers many messages, so the detail is what makes
+ * the mapping total. Never renumber, rename or remove an entry: the UI keys are
+ * keyed by it.
+ */
+export type ParseErrorDetail =
+  | 'empty-text'
+  | 'no-layout'
+  | 'bad-start-date'
+  | 'bad-end-date'
+  | 'bad-dose'
+  | 'bad-birth-date'
+  | 'missing-first-name'
+  | 'missing-last-name'
+  | 'missing-birth-date'
+  | 'no-rows'
+  | 'missing-issue-date'
+  | 'incomplete'
+  | 'no-crypto'
+  | 'unreadable-text';
+
+/**
+ * Stable sub-code of a non-blocking parse warning.
+ *
+ * Same discipline as {@link ParseErrorDetail}: `unknown-field` and
+ * `empty-string` are shared with the validator's taxonomy, so a warning that
+ * carries a detail is the parser's own and becomes localizable, while a
+ * validator warning (no detail) keeps its English text.
+ */
+export type ParserWarningDetail =
+  | 'missing-weight'
+  | 'missing-height'
+  | 'renal-unknown'
+  | 'diabetes-unknown'
+  | 'diabetes-unmatched'
+  | 'allergy-unknown'
+  | 'unit-unknown'
+  | 'unit-identity-leak'
+  | 'missing-dtfrom'
+  | 'route-undetermined'
+  | 'annotation-desync'
+  | 'language-undetected';
+
 /** A single reason why the text could not be turned into a prescription. */
 export interface ParseError {
   code: 'missing-field' | 'invalid-value' | 'unsupported-layout';
   /** JSON Pointer into the would-be result, e.g. `/Patient/BDt`. */
   path: string;
+  /**
+   * The English wording, kept verbatim: it is the fallback the UI shows when a
+   * locale has no template for `detail` (i18n plan 007, phase 8).
+   */
   message: string;
+  /** Exact message identity; see {@link ParseErrorDetail}. */
+  detail?: ParseErrorDetail;
+  /** Document-printed values only; see {@link ParseFindingParams}. */
+  params?: ParseFindingParams;
+}
+
+/**
+ * Non-blocking finding produced by this parser.
+ *
+ * Structurally a `ValidationWarning` (the result type is unchanged for its
+ * consumers) with the additive fields the localized rendering needs. A warning
+ * without them is a validator finding and keeps its English text.
+ */
+export interface ParserWarning extends ValidationWarning {
+  /** Exact message identity; see {@link ParserWarningDetail}. */
+  detail?: ParserWarningDetail;
+  /** Document-printed values only; see {@link ParseFindingParams}. */
+  params?: ParseFindingParams;
+}
+
+/** A warning's wording plus the stable sub-code and template values. */
+interface WarningDraft {
+  readonly detail: ParserWarningDetail;
+  readonly params?: ParseFindingParams;
+  /** English wording, byte-identical to the pre-i18n message. */
+  readonly message: string;
 }
 
 /** Parsed prescription plus non-blocking findings, or the blocking errors. */
 export type PrescriptionParseResult =
-  | { ok: true; value: MedicationMp; warnings: ValidationWarning[] }
+  | { ok: true; value: MedicationMp; warnings: ParserWarning[] }
   | { ok: false; errors: ParseError[] };
 
 /**
@@ -633,7 +720,7 @@ interface HeaderScan {
   /** Parsed risk categories, in printed order (renal, diabetes, allergy). */
   risks: RiskCategory[];
   /** Non-blocking findings produced while scanning the medical block. */
-  warnings: ValidationWarning[];
+  warnings: ParserWarning[];
 }
 
 interface ColumnLayout {
@@ -987,7 +1074,7 @@ function parseMeasurements(raw: string): { measurements: Measurement[]; missing:
  */
 function parseRenalRisk(
   value: string,
-): { risk?: RiskCategory; warning?: string } {
+): { risk?: RiskCategory; warning?: WarningDraft } {
   if (NEGATIVE_STATUS_PATTERN.test(value.trim())) {
     // Explicitly excluded category: `Id` without `R` (`README.md:807`).
     return { risk: { Id: 1 } };
@@ -998,7 +1085,11 @@ function parseRenalRisk(
     }
   }
   return {
-    warning: `The printed renal stage "${clip(value, 60)}" does not match a stage of chmed16a/README.md:819-848; no risk entry was invented.`,
+    warning: {
+      detail: 'renal-unknown',
+      params: { value: clip(value, 60) },
+      message: `The printed renal stage "${clip(value, 60)}" does not match a stage of chmed16a/README.md:819-848; no risk entry was invented.`,
+    },
   };
 }
 
@@ -1011,10 +1102,14 @@ function parseRenalRisk(
  */
 function parseDiabetesRisk(
   value: string,
-): { risk?: RiskCategory; warning?: string } {
+): { risk?: RiskCategory; warning?: WarningDraft } {
   if (DIABETES_UNKNOWN_PATTERN.test(value.trim())) {
     return {
-      warning: `The printed diabetes status "${clip(value, 40)}" is not one of the specified types (779 = type 1, 780 = type 2, chmed16a/README.md:911-922); no risk entry was invented.`,
+      warning: {
+        detail: 'diabetes-unknown',
+        params: { value: clip(value, 40) },
+        message: `The printed diabetes status "${clip(value, 40)}" is not one of the specified types (779 = type 1, 780 = type 2, chmed16a/README.md:911-922); no risk entry was invented.`,
+      },
     };
   }
   if (NEGATIVE_STATUS_PATTERN.test(value.trim())) {
@@ -1027,7 +1122,11 @@ function parseDiabetesRisk(
     return { risk: { Id: 7, R: [780] } };
   }
   return {
-    warning: `The printed diabetes status "${clip(value, 60)}" does not match a specified type (779/780, chmed16a/README.md:911-922); no risk entry was invented.`,
+    warning: {
+      detail: 'diabetes-unmatched',
+      params: { value: clip(value, 60) },
+      message: `The printed diabetes status "${clip(value, 60)}" does not match a specified type (779/780, chmed16a/README.md:911-922); no risk entry was invented.`,
+    },
   };
 }
 
@@ -1043,7 +1142,7 @@ function parseDiabetesRisk(
  */
 function parseAllergyRisk(
   value: string,
-): { risk?: RiskCategory; warning?: string } {
+): { risk?: RiskCategory; warning?: WarningDraft } {
   if (NEGATIVE_STATUS_PATTERN.test(value.trim())) {
     return { risk: { Id: 6 } };
   }
@@ -1051,7 +1150,11 @@ function parseAllergyRisk(
     return { risk: { Id: 6, R: [PENICILLIN_GROUP_RISK_ID] } };
   }
   return {
-    warning: `The printed allergy "${clip(value, 80)}" has no match in the repository's allergy ids (external CDSCODE list, chmed16a/README.md:809,906); it was omitted.`,
+    warning: {
+      detail: 'allergy-unknown',
+      params: { value: clip(value, 80) },
+      message: `The printed allergy "${clip(value, 80)}" has no match in the repository's allergy ids (external CDSCODE list, chmed16a/README.md:809,906); it was omitted.`,
+    },
   };
 }
 
@@ -1389,6 +1492,11 @@ function scanHeader(lines: readonly string[]): HeaderScan {
         scan.warnings.push({
           code: 'unknown-field',
           path: '/Patient/Med/Meas',
+          // One detail per member: the noun is printed vocabulary-adjacent
+          // (`weight`/`height` name the two measurements), so a localized
+          // template spells it out instead of interpolating an English word.
+          // `missing` carries the unit too (`weight ("kg")`), hence the prefix.
+          detail: missing.startsWith('weight') ? 'missing-weight' : 'missing-height',
           message: `The printed height/weight line has no readable ${missing} member; it is omitted instead of being invented.`,
         });
       }
@@ -1515,7 +1623,7 @@ function scanHeader(lines: readonly string[]): HeaderScan {
         scan.warnings.push({
           code: 'unknown-field',
           path: '/Patient/Med/Rc',
-          message: renal.warning,
+          ...renal.warning,
         });
       }
       continue;
@@ -1528,7 +1636,7 @@ function scanHeader(lines: readonly string[]): HeaderScan {
         scan.warnings.push({
           code: 'unknown-field',
           path: '/Patient/Med/Rc',
-          message: diabetes.warning,
+          ...diabetes.warning,
         });
       }
       continue;
@@ -1541,7 +1649,7 @@ function scanHeader(lines: readonly string[]): HeaderScan {
         scan.warnings.push({
           code: 'unknown-field',
           path: '/Patient/Med/Rc',
-          message: allergy.warning,
+          ...allergy.warning,
         });
       }
       continue;
@@ -1719,6 +1827,40 @@ function unitFor(raw: string): { unit: string; unknown?: string; leaked?: string
 }
 
 /**
+ * The two unit advisories of one medication row.
+ *
+ * The strict cell reader and the tolerant token reader both normalize through
+ * `unitFor`, so the findings (and their `detail`/`params`) are authored once
+ * here instead of being duplicated with two indentation levels. i18n plan 007,
+ * phase 8: wording unchanged, only the stable sub-code and the echoed values
+ * were added.
+ */
+function pushUnitWarnings(
+  warnings: ParserWarning[],
+  rowIndex: number,
+  unit: { readonly unit: string; readonly unknown?: string; readonly leaked?: string },
+): void {
+  if (unit.unknown !== undefined) {
+    warnings.push({
+      code: 'unknown-field',
+      path: `/Medicaments/${rowIndex}/Unit`,
+      detail: 'unit-unknown',
+      params: { value: clip(unit.unknown, 40) },
+      message: `The printed unit "${clip(unit.unknown, 40)}" is not in the unit dictionary; it is kept verbatim.`,
+    });
+  }
+  if (unit.leaked !== undefined) {
+    warnings.push({
+      code: 'unknown-field',
+      path: `/Medicaments/${rowIndex}/Unit`,
+      detail: 'unit-identity-leak',
+      params: { value: clip(unit.leaked, 40), unit: unit.unit },
+      message: `The printed unit "${clip(unit.leaked, 40)}" carries extra text after the recognized unit; only "${unit.unit}" is kept.`,
+    });
+  }
+}
+
+/**
  * Derives the route of administration from the printed description and
  * instructions (`chmed16a/README.md:1032-1043`, CDTYP 26 values).
  *
@@ -1737,7 +1879,7 @@ function unitFor(raw: string): { unit: string; unknown?: string; leaked?: string
  * worse than a missing optional field, so any ambiguity is surfaced instead of
  * invented.
  */
-function routeFor(text: string): { roa?: 'IM' | 'PO'; warning?: string } {
+function routeFor(text: string): { roa?: 'IM' | 'PO'; warning?: WarningDraft } {
   if (IM_ROUTE_PATTERN.test(text)) {
     return { roa: 'IM' };
   }
@@ -1746,8 +1888,11 @@ function routeFor(text: string): { roa?: 'IM' | 'PO'; warning?: string } {
   }
   if (NON_ORAL_FORM_PATTERN.test(text)) {
     return {
-      warning:
-        'No route of administration could be derived from the printed text; "Roa" is omitted.',
+      warning: {
+        detail: 'route-undetermined',
+        message:
+          'No route of administration could be derived from the printed text; "Roa" is omitted.',
+      },
     };
   }
   return { roa: 'PO' };
@@ -1838,7 +1983,7 @@ function parseMedicamentCells(
   layout: ColumnLayout,
   rowIndex: number,
   errors: ParseError[],
-  warnings: ValidationWarning[],
+  warnings: ParserWarning[],
   inReserve: boolean,
   productId: string | undefined,
 ): MedicamentMp | undefined {
@@ -1857,20 +2002,7 @@ function parseMedicamentCells(
     IdType: identity.idType,
     Unit: unit.unit,
   };
-  if (unit.unknown !== undefined) {
-    warnings.push({
-      code: 'unknown-field',
-      path: `/Medicaments/${rowIndex}/Unit`,
-      message: `The printed unit "${clip(unit.unknown, 40)}" is not in the unit dictionary; it is kept verbatim.`,
-    });
-  }
-  if (unit.leaked !== undefined) {
-    warnings.push({
-      code: 'unknown-field',
-      path: `/Medicaments/${rowIndex}/Unit`,
-      message: `The printed unit "${clip(unit.leaked, 40)}" carries extra text after the recognized unit; only "${unit.unit}" is kept.`,
-    });
-  }
+  pushUnitWarnings(warnings, rowIndex, unit);
 
   const instructions = readCell(cells, layout.instructions);
   if (!isBlankCell(instructions)) {
@@ -1913,6 +2045,8 @@ function parseMedicamentCells(
       errors.push({
         code: 'invalid-value',
         path: `/Medicaments/${rowIndex}/Pos/0/DtFrom`,
+        detail: 'bad-start-date',
+        params: { value: clip(fromRaw, 40) },
         message: `Cannot read the start date "${clip(fromRaw, 40)}"; expected DD.MM.YYYY.`,
       });
     }
@@ -1932,6 +2066,8 @@ function parseMedicamentCells(
       errors.push({
         code: 'invalid-value',
         path: `/Medicaments/${rowIndex}/Pos/0/DtTo`,
+        detail: 'bad-end-date',
+        params: { value: clip(endRaw, 40) },
         message: `Cannot read the end date "${clip(endRaw, 40)}"; expected DD.MM.YYYY.`,
       });
     }
@@ -1942,6 +2078,8 @@ function parseMedicamentCells(
     errors.push({
       code: 'invalid-value',
       path: `/Medicaments/${rowIndex}/Pos/0/D`,
+      detail: 'bad-dose',
+      params: { value: clip(dosage.invalid, 40) },
       message: `Cannot read the dose "${clip(dosage.invalid, 40)}"; expected a number or one of ½, 1/3, ¼, 2/3, ¾, 1/8.`,
     });
   }
@@ -1958,6 +2096,11 @@ function parseMedicamentCells(
       warnings.push({
         code: 'empty-string',
         path: `/Medicaments/${rowIndex}/Pos/0/DtFrom`,
+        // Placeholder advisories use one detail per placeholder situation and
+        // spell the field names inside the template (`"Von"` is the printed
+        // title, `"DtFrom"` the JSON key): both must survive verbatim in every
+        // locale, so a `{field}` parameter would only leak English into it.
+        detail: 'missing-dtfrom',
         message:
           'No printed start date ("Von") was found for this medication row; "DtFrom" keeps the required empty placeholder.',
       });
@@ -1981,7 +2124,7 @@ function parseMedicamentCells(
     warnings.push({
       code: 'unknown-field',
       path: `/Medicaments/${rowIndex}/Roa`,
-      message: route.warning,
+      ...route.warning,
     });
   }
 
@@ -2002,10 +2145,10 @@ function parseMedicamentRows(
   layout: ColumnLayout,
   pageIndex: readonly number[],
   productIds: readonly (string | undefined)[] | undefined,
-): { medicaments: MedicamentMp[]; errors: ParseError[]; warnings: ValidationWarning[] } {
+): { medicaments: MedicamentMp[]; errors: ParseError[]; warnings: ParserWarning[] } {
   const medicaments: MedicamentMp[] = [];
   const errors: ParseError[] = [];
-  const warnings: ValidationWarning[] = [];
+  const warnings: ParserWarning[] = [];
   // A second table (`Reservemedikation`) re-prints the column titles, possibly
   // at different x positions but in the same order; re-deriving the layout from
   // its own header keeps index-based reads honest across tables.
@@ -2275,7 +2418,7 @@ function parseTolerantRow(
   layout: TolerantLayout,
   rowIndex: number,
   errors: ParseError[],
-  warnings: ValidationWarning[],
+  warnings: ParserWarning[],
   inReserve: boolean,
 ): MedicamentMp | undefined {
   const tokens = tokenizeRow(line);
@@ -2342,20 +2485,7 @@ function parseTolerantRow(
       // unit" cell); a genuinely blank cell keeps the `''` placeholder.
       const unit = unitFor(quantity.text);
       medicament.Unit = unit.unit;
-      if (unit.unknown !== undefined) {
-        warnings.push({
-          code: 'unknown-field',
-          path: `/Medicaments/${rowIndex}/Unit`,
-          message: `The printed unit "${clip(unit.unknown, 40)}" is not in the unit dictionary; it is kept verbatim.`,
-        });
-      }
-      if (unit.leaked !== undefined) {
-        warnings.push({
-          code: 'unknown-field',
-          path: `/Medicaments/${rowIndex}/Unit`,
-          message: `The printed unit "${clip(unit.leaked, 40)}" carries extra text after the recognized unit; only "${unit.unit}" is kept.`,
-        });
-      }
+      pushUnitWarnings(warnings, rowIndex, unit);
       cursor += 1;
     }
 
@@ -2431,6 +2561,8 @@ function parseTolerantRow(
       errors.push({
         code: 'invalid-value',
         path: `/Medicaments/${rowIndex}/Pos/0/DtFrom`,
+        detail: 'bad-start-date',
+        params: { value: clip(fromRaw, 40) },
         message: `Cannot read the start date "${clip(fromRaw, 40)}"; expected DD.MM.YYYY.`,
       });
     }
@@ -2445,6 +2577,8 @@ function parseTolerantRow(
       errors.push({
         code: 'invalid-value',
         path: `/Medicaments/${rowIndex}/Pos/0/DtTo`,
+        detail: 'bad-end-date',
+        params: { value: clip(endRaw, 40) },
         message: `Cannot read the end date "${clip(endRaw, 40)}"; expected DD.MM.YYYY.`,
       });
     }
@@ -2453,6 +2587,8 @@ function parseTolerantRow(
     errors.push({
       code: 'invalid-value',
       path: `/Medicaments/${rowIndex}/Pos/0/D`,
+      detail: 'bad-dose',
+      params: { value: clip(invalidDose, 40) },
       message: `Cannot read the dose "${clip(invalidDose, 40)}"; expected a number or one of ½, 1/3, ¼, 2/3, ¾, 1/8.`,
     });
   }
@@ -2469,6 +2605,11 @@ function parseTolerantRow(
       warnings.push({
         code: 'empty-string',
         path: `/Medicaments/${rowIndex}/Pos/0/DtFrom`,
+        // Placeholder advisories use one detail per placeholder situation and
+        // spell the field names inside the template (`"Von"` is the printed
+        // title, `"DtFrom"` the JSON key): both must survive verbatim in every
+        // locale, so a `{field}` parameter would only leak English into it.
+        detail: 'missing-dtfrom',
         message:
           'No printed start date ("Von") was found for this medication row; "DtFrom" keeps the required empty placeholder.',
       });
@@ -2492,7 +2633,7 @@ function parseTolerantRow(
     warnings.push({
       code: 'unknown-field',
       path: `/Medicaments/${rowIndex}/Roa`,
-      message: route.warning,
+      ...route.warning,
     });
   }
 
@@ -2505,10 +2646,10 @@ function parseTolerantMedicamentRows(
   headerIndex: number,
   layout: TolerantLayout,
   pageIndex: readonly number[],
-): { medicaments: MedicamentMp[]; errors: ParseError[]; warnings: ValidationWarning[] } {
+): { medicaments: MedicamentMp[]; errors: ParseError[]; warnings: ParserWarning[] } {
   const medicaments: MedicamentMp[] = [];
   const errors: ParseError[] = [];
-  const warnings: ValidationWarning[] = [];
+  const warnings: ParserWarning[] = [];
   let inReserve = false;
   let sawRow = false;
   let lastRowPage = pageIndex[headerIndex] ?? 0;
@@ -2734,10 +2875,13 @@ function findMedicationHeader(
   return undefined;
 }
 
-function unsupported(message: string): PrescriptionParseResult {
+function unsupported(
+  detail: 'empty-text' | 'no-layout',
+  message: string,
+): PrescriptionParseResult {
   return {
     ok: false,
-    errors: [{ code: 'unsupported-layout', path: '', message }],
+    errors: [{ code: 'unsupported-layout', path: '', detail, message }],
   };
 }
 
@@ -2780,7 +2924,10 @@ function parseInternal(
   fallbackText: string | undefined,
 ): PrescriptionParseResult {
   if (typeof text !== 'string' || text.trim() === '') {
-    return unsupported('The text is empty; no eMediplan paper layout was found.');
+    return unsupported(
+      'empty-text',
+      'The text is empty; no eMediplan paper layout was found.',
+    );
   }
 
   const lines = normalizeLines(text);
@@ -2800,7 +2947,7 @@ function parseInternal(
   let rows: {
     medicaments: MedicamentMp[];
     errors: ParseError[];
-    warnings: ValidationWarning[];
+    warnings: ParserWarning[];
   };
   if (strictHeader !== undefined) {
     headerIndex = strictHeader.index;
@@ -2831,6 +2978,7 @@ function parseInternal(
       rows.warnings.push({
         code: 'unknown-field',
         path: '/Medicaments',
+        detail: 'annotation-desync',
         message:
           'The link-annotation row geometry and the parsed medication rows do not correspond one-to-one; product ids (IdType 4) were dropped and printed-text identities kept.',
       });
@@ -2845,6 +2993,7 @@ function parseInternal(
     );
   } else {
     return unsupported(
+      'no-layout',
       'No medication column header ("Medication", "Morning", ...) was found; the text is not a printed eMediplan paper layout.',
     );
   }
@@ -2859,6 +3008,7 @@ function parseInternal(
     errors.push({
       code: 'missing-field',
       path: '/Patient/FName',
+      detail: 'missing-first-name',
       message: 'The patient block has no first name.',
     });
   }
@@ -2866,6 +3016,7 @@ function parseInternal(
     errors.push({
       code: 'missing-field',
       path: '/Patient/LName',
+      detail: 'missing-last-name',
       message: 'The patient block has no last name.',
     });
   }
@@ -2874,12 +3025,15 @@ function parseInternal(
       errors.push({
         code: 'invalid-value',
         path: '/Patient/BDt',
+        detail: 'bad-birth-date',
+        params: { value: clip(scan.patient.bDtRaw, 40) },
         message: `Cannot read the birth date "${clip(scan.patient.bDtRaw, 40)}"; expected DD.MM.YYYY.`,
       });
     } else {
       errors.push({
         code: 'missing-field',
         path: '/Patient/BDt',
+        detail: 'missing-birth-date',
         message: 'The patient block has no "Born on:" date.',
       });
     }
@@ -2891,6 +3045,7 @@ function parseInternal(
     errors.push({
       code: 'missing-field',
       path: '/Medicaments',
+      detail: 'no-rows',
       message: 'No medication row was found below the column header.',
     });
   }
@@ -2900,6 +3055,7 @@ function parseInternal(
     errors.push({
       code: 'missing-field',
       path: '/Dt',
+      detail: 'missing-issue-date',
       message: 'The document has no readable "Issue date:".',
     });
   }
@@ -2912,7 +3068,9 @@ function parseInternal(
   if (fName === undefined || lName === undefined || bDt === undefined || issueDate === undefined) {
     return {
       ok: false,
-      errors: [{ code: 'missing-field', path: '', message: 'The prescription is incomplete.' }],
+      errors: [
+        { code: 'missing-field', path: '', detail: 'incomplete', message: 'The prescription is incomplete.' },
+      ],
     };
   }
 
@@ -2969,6 +3127,7 @@ function parseInternal(
           {
             code: 'invalid-value',
             path: '/Id',
+            detail: 'no-crypto',
             message:
               'Cannot generate a prescription id: this browser provides neither crypto.randomUUID nor crypto.getRandomValues.',
           },
@@ -2994,11 +3153,12 @@ function parseInternal(
     value.Rmk = remark;
   }
 
-  const warnings: ValidationWarning[] = [...rows.warnings, ...scan.warnings];
+  const warnings: ParserWarning[] = [...rows.warnings, ...scan.warnings];
   if (language === undefined) {
     warnings.push({
       code: 'unknown-field',
       path: '/Patient/Lng',
+      detail: 'language-undetected',
       message:
         'The printed vocabulary does not match a language this parser maps; "Lng" keeps the required empty placeholder (French/Italian detection is deferred to the i18n plan).',
     });
@@ -3051,6 +3211,8 @@ export function parsePrescriptionText(
         {
           code: 'invalid-value',
           path: '',
+          detail: 'unreadable-text',
+          params: { reason: clip(detail, 160) },
           message: `The eMediplan text could not be read: ${clip(detail, 160)}`,
         },
       ],

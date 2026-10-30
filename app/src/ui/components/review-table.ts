@@ -107,6 +107,16 @@
  * finding id) and is a static description, not a live region: announcing every
  * keystroke would be noise. `aria-invalid` is set only while a format hint is
  * visible, i.e. about the text being typed, never about the export decision.
+ *
+ * ## Locale refresh (i18n plan 007, phase 5)
+ *
+ * Every label of this component — captions, column/row/group headers, each
+ * input's accessible name, status chips, advisory hints, the required counter —
+ * is resolved through the catalogue when it is written, never stored as English
+ * text. `relabel()` re-runs exactly those writes in place, so switching language
+ * while a reviewer has an edit in progress re-words the table without rebuilding
+ * it: values (including text typed but not committed), focus, caret, the
+ * `disabled` state and the findings-derived statuses all survive.
  */
 
 import type { MedicationMp } from '../../core/types';
@@ -193,6 +203,15 @@ export interface ReviewTableHandle {
    * object. Values and inputs are left untouched, so focus and caret survive.
    */
   updateFindings(findings: readonly ReviewFinding[]): void;
+  /**
+   * Re-resolves every label for the current locale, in place.
+   *
+   * Label-only by contract (i18n plan 007, phase 5): text nodes and accessible
+   * names are rewritten, nothing is rebuilt. Input values (including text typed
+   * but not yet committed), focus, caret and `disabled` state survive — a
+   * `render` would drop all of them, which is exactly why this exists.
+   */
+  relabel(): void;
   /** Disables the inputs (the pipeline is running); re-enables them otherwise. */
   setDisabled(disabled: boolean): void;
   /** The editable input for a JSON Pointer, or `null` when it is not rendered. */
@@ -231,30 +250,67 @@ const CAPTION_ID_MEDICAMENTS = 'pdf-review-caption-medicaments';
 /**
  * Section names fed into the one caption template (`pdfReviewCaption`).
  *
- * They live here rather than in `STRINGS` because the phase budget allows a
- * single template key; the surrounding captions, headers, statuses and the
- * placeholder are all `STRINGS` keys.
+ * Keys, not literals: the caption is prose and follows the locale, so phase 5 of
+ * the i18n plan promoted the three nouns it slots in. The template itself is
+ * unchanged — a translation supplies the noun in its own grammatical form.
  */
-const SECTION_NAMES = {
-  heading: 'prescription data',
-  summary: 'patient data',
-  medicaments: 'medicaments',
-} as const;
-
-/** Row-group labels: the English names of the object sections. */
-const GROUP_LABELS = {
-  patient: 'Patient',
-} as const;
+const SECTION_NAME_KEYS = {
+  heading: 'pdfReviewSectionHeading',
+  summary: 'pdfReviewSectionSummary',
+  medicaments: 'pdfReviewSectionMedicaments',
+} as const satisfies Record<'heading' | 'summary' | 'medicaments', UiStringKey>;
 
 /**
- * Column header of the `IdType` cell.
+ * The caption of one table (`Review extracted <section>`), resolved now.
  *
- * It is the JSON key itself, like the group labels above: the field is an
- * encoding enum (1 = none, 2 = GTIN, 3 = pharmacode, 4 = product number), not
- * translated prose. Keeping the literal here avoids a catalogue change in this
- * phase; plan 006 phase 6 may promote it to a `STRINGS` key.
+ * Every call site re-resolves it, which is what makes the locale refresh
+ * label-only: the caption text and its `aria-labelledby` target stay the same
+ * node.
+ */
+function captionFor(section: UiStringKey): string {
+  return format(text('pdfReviewCaption'), { section: text(section) });
+}
+
+/**
+ * Column header and row label of the `IdType` cell.
+ *
+ * It is the JSON key itself: the field is an encoding enum (1 = none, 2 = GTIN,
+ * 3 = pharmacode, 4 = product number), not translated prose — the same
+ * documented exception as the `Prescription` type names and `Rx` acronyms.
+ * {@link reviewFieldLabel} falls back to the raw key for any field without a
+ * catalogue entry, which is exactly this case.
  */
 const ID_TYPE_HEADER = 'IdType';
+
+/**
+ * Catalogue keys of the whitelisted scalar labels.
+ *
+ * Keyed by `section.key`, so the table derives a label from the field instead of
+ * storing a snapshot of the English wording: the label is re-resolved on every
+ * write, so a locale change needs no rebuild and touches no value.
+ */
+const FIELD_LABEL_KEYS: Readonly<Partial<Record<string, UiStringKey>>> = {
+  'Patient.Lng': 'pdfReviewFieldLanguage',
+  'Patient.FName': 'pdfReviewFieldFirstName',
+  'Patient.LName': 'pdfReviewFieldLastName',
+  'Patient.BDt': 'pdfReviewFieldBirthdate',
+  'Patient.Gender': 'pdfReviewFieldGender',
+  'Medicaments.Id': 'pdfReviewIdHeader',
+  'Medicaments.Unit': 'pdfReviewUnitHeader',
+  'Medicaments.AppInstr': 'pdfReviewInstructionsHeader',
+};
+
+/**
+ * The label of one whitelisted field: its catalogue entry, or the raw JSON key
+ * when the field has none (`IdType`).
+ *
+ * Pure apart from the locale lookup (`text()`), and exported so the mapping —
+ * including the deliberate `IdType` fallback — is coverable without a DOM.
+ */
+export function reviewFieldLabel(section: ReviewSection, key: string): string {
+  const labelKey = FIELD_LABEL_KEYS[`${section}.${key}`];
+  return labelKey === undefined ? key : text(labelKey);
+}
 
 /** Status → text key, class and icon. Text always carries the meaning. */
 const STATUS_TEXT_KEYS = {
@@ -307,8 +363,13 @@ interface FieldSpec {
   readonly index?: number;
   /** JSON key, also used for the parent-chain (missing-required) match. */
   readonly key: string;
-  /** Row header, column name in the `aria-label`, and row-summary detail. */
-  readonly label: string;
+  /**
+   * Row header, column name in the `aria-label`, and row-summary detail.
+   *
+   * A provider, not a snapshot: every writer resolves it afresh, so a locale
+   * change re-words a label that is already on screen without rebuilding a row.
+   */
+  readonly label: () => string;
   /** JSON Pointer of the value in the prescription object. */
   readonly pointer: string;
   /** Current text of the field: the stored string/number, else `''`. */
@@ -336,6 +397,14 @@ interface RenderContext {
   readonly guided: boolean;
   /** One closure per status cell/row; see `updateFindings`. */
   readonly refreshers: Array<(findings: readonly ReviewFinding[]) => void>;
+  /**
+   * One closure per label-bearing node of this render (caption, headers, group
+   * and row labels, input accessible names).
+   *
+   * `relabel` re-runs them, which is the whole locale-refresh mechanism: the
+   * nodes and their values are never re-authored, only their words.
+   */
+  readonly labelWriters: Array<() => void>;
   /** Required specs of the current render, in DOM order, for the counter. */
   readonly requiredFields: FieldSpec[];
   /** JSON Pointer → editable input, for anchors and `getFieldElement`. */
@@ -395,7 +464,6 @@ function makeField(
   section: ReviewSection,
   index: number | undefined,
   key: string,
-  label: string,
   raw: () => string,
   mono = false,
   required = false,
@@ -405,7 +473,7 @@ function makeField(
     section,
     index,
     key,
-    label,
+    label: () => reviewFieldLabel(section, key),
     pointer: pointerFor(section, index, key),
     raw,
     mono,
@@ -608,11 +676,39 @@ function createStatusChip(status: ReviewStatus): HTMLElement {
 }
 
 /** A `<th scope="col">` header cell. */
-function createColumnHeader(label: string): HTMLTableCellElement {
+function createColumnHeader(label: () => string, context: RenderContext): HTMLTableCellElement {
   const cell = el('th');
   cell.setAttribute('scope', 'col');
-  cell.textContent = label;
+  trackText(cell, label, context);
   return cell;
+}
+
+/**
+ * Writes `label()` into a node's text now, and registers the same write for the
+ * next locale refresh.
+ *
+ * The one mechanism behind every static label of the table: a locale change
+ * re-runs the writers in place, so no header, caption or row label is ever
+ * rebuilt (which is what would drop input values, focus and the caret).
+ */
+function trackText(node: HTMLElement, label: () => string, context: RenderContext): void {
+  node.textContent = label();
+  context.labelWriters.push(() => {
+    node.textContent = label();
+  });
+}
+
+/** The same for one attribute (`aria-label`), e.g. a cell's accessible name. */
+function trackAttribute(
+  node: Element,
+  name: string,
+  label: () => string,
+  context: RenderContext,
+): void {
+  node.setAttribute(name, label());
+  context.labelWriters.push(() => {
+    node.setAttribute(name, label());
+  });
 }
 
 /**
@@ -656,7 +752,7 @@ function createStatusCell(): {
  */
 function createValueCell(
   field: FieldSpec,
-  rowLabel: string,
+  rowLabel: () => string,
   context: RenderContext,
 ): {
   readonly cell: HTMLTableCellElement;
@@ -667,7 +763,9 @@ function createValueCell(
 
   const edit = context.edit;
   if (edit === null) {
-    cell.textContent = displayValue(field.raw());
+    // Read-only cell: the placeholder is a catalogue string, so it takes the same
+    // label path as every other text of the table.
+    trackText(cell, () => displayValue(field.raw()), context);
     return { cell, input: null, refreshAdvisory: () => undefined };
   }
 
@@ -680,9 +778,13 @@ function createValueCell(
   // A name or an id is not prose: the browser's spell checker would underline
   // every extracted surname.
   input.setAttribute('spellcheck', 'false');
-  input.setAttribute(
+  // Resolved afresh, so `relabel` can re-word the accessible name in place: a
+  // name built once at mount would stay English after a locale change.
+  trackAttribute(
+    input,
     'aria-label',
-    format(text('reviewCellAriaLabel'), { field: field.label, row: rowLabel }),
+    () => format(text('reviewCellAriaLabel'), { field: field.label(), row: rowLabel() }),
+    context,
   );
   // `change`, not `input`: the value is committed when the user leaves the
   // field (blur or Enter), so a re-validation never runs mid-word.
@@ -746,14 +848,14 @@ function createSummaryTable(context: RenderContext): HTMLTableElement {
 
   const caption = el('caption', 'review-table-caption');
   caption.id = CAPTION_ID_SUMMARY;
-  caption.textContent = format(text('pdfReviewCaption'), { section: SECTION_NAMES.summary });
+  trackText(caption, () => captionFor(SECTION_NAME_KEYS.summary), context);
 
   const head = el('thead');
   const headRow = el('tr');
   headRow.append(
-    createColumnHeader(text('pdfReviewFieldHeader')),
-    createColumnHeader(text('pdfReviewValueHeader')),
-    createColumnHeader(text('pdfReviewStatusHeader')),
+    createColumnHeader(() => text('pdfReviewFieldHeader'), context),
+    createColumnHeader(() => text('pdfReviewValueHeader'), context),
+    createColumnHeader(() => text('pdfReviewStatusHeader'), context),
   );
   head.append(headRow);
 
@@ -771,42 +873,35 @@ function createSummaryTable(context: RenderContext): HTMLTableElement {
    * because they are the printable identity a reviewer corrects most often, but
    * the MP schema accepts their absence and the counter must not claim
    * otherwise.
+   *
+   * The labels come from `FIELD_LABEL_KEYS`, never from this table: `Gender`'s
+   * entry spells out the encoded integers (1 = male, 2 = female) because the
+   * schema stores that number and the row is where a reviewer reads what it
+   * means.
    */
   const patientRows: readonly FieldSpec[] = [
-    makeField('Patient', undefined, 'Lng', 'Language', () => readPatient('Lng'), false, true),
-    makeField('Patient', undefined, 'FName', 'First name', () => readPatient('FName')),
-    makeField('Patient', undefined, 'LName', 'Last name', () => readPatient('LName')),
+    makeField('Patient', undefined, 'Lng', () => readPatient('Lng'), false, true),
+    makeField('Patient', undefined, 'FName', () => readPatient('FName')),
+    makeField('Patient', undefined, 'LName', () => readPatient('LName')),
     // `BDt` is a plain string in the schema (no format keyword), so the printed
     // value is edited as-is and a malformed date is reported by the core. The
     // advisory merely reminds the reviewer of the `YYYY-MM-DD` shape the parser
     // writes; it decides nothing.
-    makeField(
-      'Patient',
-      undefined,
-      'BDt',
-      'Birthdate',
-      () => readPatient('BDt'),
-      false,
-      false,
-      'date',
-    ),
-    makeField(
-      'Patient',
-      undefined,
-      'Gender',
-      // The schema stores the encoded integer; the row says what it means.
-      'Gender (1 = male, 2 = female)',
-      () => readPatient('Gender'),
-    ),
+    makeField('Patient', undefined, 'BDt', () => readPatient('BDt'), false, false, 'date'),
+    makeField('Patient', undefined, 'Gender', () => readPatient('Gender')),
   ];
 
-  table.append(caption, head, createFieldGroup(GROUP_LABELS.patient, patientRows, context));
+  table.append(
+    caption,
+    head,
+    createFieldGroup(() => text('recapPatientLabel'), patientRows, context),
+  );
   return table;
 }
 
 /** One `<tbody>`: a spanning group header row, then one row per field. */
 function createFieldGroup(
-  label: string,
+  label: () => string,
   fields: readonly FieldSpec[],
   context: RenderContext,
 ): HTMLTableSectionElement {
@@ -816,7 +911,9 @@ function createFieldGroup(
   const groupHeader = el('th');
   groupHeader.setAttribute('scope', 'rowgroup');
   groupHeader.colSpan = 3;
-  groupHeader.textContent = label;
+  // The recap's row label is the same noun, so it is reused rather than added
+  // twice: one word, one translation.
+  trackText(groupHeader, label, context);
   groupRow.append(groupHeader);
   body.append(groupRow);
 
@@ -840,7 +937,7 @@ function createFieldGroup(
     const row = el('tr');
     const header = el('th');
     header.setAttribute('scope', 'row');
-    header.textContent = field.label;
+    trackText(header, field.label, context);
     row.append(header, value.cell, status.cell);
     body.append(row);
 
@@ -863,17 +960,17 @@ function createMedicamentsTable(context: RenderContext): HTMLTableElement {
 
   const caption = el('caption', 'review-table-caption');
   caption.id = CAPTION_ID_MEDICAMENTS;
-  caption.textContent = format(text('pdfReviewCaption'), { section: SECTION_NAMES.medicaments });
+  trackText(caption, () => captionFor(SECTION_NAME_KEYS.medicaments), context);
 
   const head = el('thead');
   const headRow = el('tr');
   headRow.append(
-    createColumnHeader(text('pdfReviewPositionHeader')),
-    createColumnHeader(text('pdfReviewIdHeader')),
-    createColumnHeader(ID_TYPE_HEADER),
-    createColumnHeader(text('pdfReviewUnitHeader')),
-    createColumnHeader(text('pdfReviewInstructionsHeader')),
-    createColumnHeader(text('pdfReviewStatusHeader')),
+    createColumnHeader(() => text('pdfReviewPositionHeader'), context),
+    createColumnHeader(() => text('pdfReviewIdHeader'), context),
+    createColumnHeader(() => ID_TYPE_HEADER, context),
+    createColumnHeader(() => text('pdfReviewUnitHeader'), context),
+    createColumnHeader(() => text('pdfReviewInstructionsHeader'), context),
+    createColumnHeader(() => text('pdfReviewStatusHeader'), context),
   );
   head.append(headRow);
 
@@ -900,7 +997,6 @@ function createMedicamentsTable(context: RenderContext): HTMLTableElement {
       'Medicaments',
       index,
       'Id',
-      text('pdfReviewIdHeader'),
       () => readEntry('Id'),
       true,
       true,
@@ -909,7 +1005,6 @@ function createMedicamentsTable(context: RenderContext): HTMLTableElement {
       'Medicaments',
       index,
       'IdType',
-      ID_TYPE_HEADER,
       () => readEntry('IdType'),
       false,
       true,
@@ -918,7 +1013,6 @@ function createMedicamentsTable(context: RenderContext): HTMLTableElement {
       'Medicaments',
       index,
       'Unit',
-      text('pdfReviewUnitHeader'),
       () => readEntry('Unit'),
       false,
       true,
@@ -927,7 +1021,6 @@ function createMedicamentsTable(context: RenderContext): HTMLTableElement {
       'Medicaments',
       index,
       'AppInstr',
-      text('pdfReviewInstructionsHeader'),
       () => readEntry('AppInstr'),
     );
     const cells: readonly FieldSpec[] = [
@@ -937,7 +1030,7 @@ function createMedicamentsTable(context: RenderContext): HTMLTableElement {
       instructionsField,
     ];
 
-    const rowLabel = format(text('reviewMedicamentRow'), { position: index + 1 });
+    const rowLabel = (): string => format(text('reviewMedicamentRow'), { position: index + 1 });
     const status = createStatusCell();
 
     const rowCells = cells.map((cell) => createValueCell(cell, rowLabel, context));
@@ -946,7 +1039,7 @@ function createMedicamentsTable(context: RenderContext): HTMLTableElement {
       const flagged = cells.filter((cell) => fieldStatus(cell, findings) === 'to-verify');
       status.update(
         flagged.length > 0 ? 'to-verify' : 'recognized',
-        flagged.map((cell) => cell.label),
+        flagged.map((cell) => cell.label()),
       );
       cells.forEach((cell, cellIndex) => {
         const value = rowCells[cellIndex];
@@ -982,7 +1075,7 @@ function createMedicamentsTable(context: RenderContext): HTMLTableElement {
     const row = el('tr');
     const empty = el('td', 'review-value');
     empty.colSpan = 6;
-    empty.textContent = text('reviewValuePlaceholder');
+    trackText(empty, () => text('reviewValuePlaceholder'), context);
     row.append(empty);
     body.append(row);
   }
@@ -1042,7 +1135,7 @@ export function createReviewTable(
   section.hidden = true;
 
   const heading = el('h3');
-  heading.textContent = format(text('pdfReviewCaption'), { section: SECTION_NAMES.heading });
+  heading.textContent = captionFor(SECTION_NAME_KEYS.heading);
 
   // Editable only with a listener: a cell whose edit would go nowhere is a trap.
   const onEdit = options.editable === true ? options.onEdit : undefined;
@@ -1079,6 +1172,8 @@ export function createReviewTable(
   const inputs: HTMLInputElement[] = [];
   /** One status refresher per cell/row of the current render. */
   const refreshers: Array<(findings: readonly ReviewFinding[]) => void> = [];
+  /** One label writer per label-bearing node of the current render. */
+  const labelWriters: Array<() => void> = [];
   /** Required specs of the current render, in DOM order. */
   const requiredFields: FieldSpec[] = [];
   /** JSON Pointer → editable input of the current render. */
@@ -1142,6 +1237,7 @@ export function createReviewTable(
     refreshers,
     disabled,
     guided,
+    labelWriters,
     requiredFields,
     fieldInputs,
     findingsRef,
@@ -1149,6 +1245,7 @@ export function createReviewTable(
 
   const render = (prescription: ReviewPrescription, findings: readonly ReviewFinding[]): void => {
     refreshers.length = 0;
+    labelWriters.length = 0;
     inputs.length = 0;
     requiredFields.length = 0;
     fieldInputs.clear();
@@ -1172,6 +1269,30 @@ export function createReviewTable(
     refreshIcons();
   };
 
+  /**
+   * Re-resolves every label of the built tables for the current locale.
+   *
+   * LABEL-ONLY (i18n plan 007, phase 5). Two mechanisms, both value-safe:
+   * - the label writers rewrite the caption, headers, group/row labels and each
+   *   input's `aria-label` — text and attributes only;
+   * - `updateFindings` re-runs the status refreshers, which re-word a status chip,
+   *   a row summary, an advisory hint and their `aria-describedby` from the
+   *   findings already in hand.
+   *
+   * Nothing here reads a value into a cell, rebuilds a table or re-validates, so
+   * every input keeps its value (including text typed but not yet committed),
+   * caret, selection and `disabled` state. Status derivation is pure, so running
+   * it again cannot change a verdict — only the words that state it.
+   */
+  const relabel = (): void => {
+    heading.textContent = captionFor(SECTION_NAME_KEYS.heading);
+    hint.textContent = text('reviewEditableHint');
+    for (const write of labelWriters) {
+      write();
+    }
+    updateFindings(findingsRef.current);
+  };
+
   const setDisabled = (value: boolean): void => {
     disabled = value;
     for (const input of inputs) {
@@ -1185,6 +1306,7 @@ export function createReviewTable(
     // Dropping the nodes (not just hiding them) keeps a stale table out of the
     // accessibility tree after a reset or a failed run.
     refreshers.length = 0;
+    labelWriters.length = 0;
     inputs.length = 0;
     requiredFields.length = 0;
     fieldInputs.clear();
@@ -1197,5 +1319,5 @@ export function createReviewTable(
     section.hidden = true;
   };
 
-  return { render, updateFindings, setDisabled, getFieldElement, clear };
+  return { render, updateFindings, relabel, setDisabled, getFieldElement, clear };
 }

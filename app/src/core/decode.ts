@@ -17,7 +17,7 @@ import { ungzip } from 'pako';
 
 import { decodeBase64 } from './base64';
 import { parseHeader } from './header';
-import type { Header } from './header';
+import type { Header, HeaderError } from './header';
 import { parseJsonText } from './validate';
 import type { ValidationError } from './validate';
 
@@ -30,9 +30,23 @@ export type DecodeErrorCode =
   | 'bad-gzip'
   | 'bad-json';
 
+/**
+ * Stable sub-code of a decode failure whose `code` covers more than one message.
+ *
+ * Only `bad-json` needs one: the code is shared with the JSON syntax errors of
+ * the validator (whose text is the schema engine's own and stays English), while
+ * the UTF-8 rejection below is this module's prose and is localized.
+ */
+export type DecodeErrorMessageDetail = 'not-utf8';
+
 export interface DecodeError {
   readonly code: DecodeErrorCode;
+  /** English fallback wording; the UI resolves `code`/`detail` to its locale. */
   readonly message: string;
+  /** Narrows a multi-message `code` to one stable message (see above). */
+  readonly detail?: DecodeErrorMessageDetail;
+  /** Values a localized template interpolates (`{reason}`); never prose. */
+  readonly params?: Readonly<Record<string, string | number>>;
   /** 1-based, only for `bad-json`. */
   readonly line?: number;
   readonly column?: number;
@@ -52,8 +66,40 @@ export interface DecodeFailure {
 
 export type DecodeResult = DecodeSuccess | DecodeFailure;
 
-function failure(code: DecodeErrorCode, message: string): DecodeFailure {
-  return { ok: false, errors: [{ code, message }] };
+/** Extra, locale-agnostic facts of a decode failure (never prose). */
+interface DecodeFailureDetail {
+  readonly detail?: DecodeErrorMessageDetail;
+  readonly params?: Readonly<Record<string, string | number>>;
+}
+
+function failure(
+  code: DecodeErrorCode,
+  message: string,
+  extra: DecodeFailureDetail = {},
+): DecodeFailure {
+  const { detail, params } = extra;
+  const error: DecodeError = {
+    code,
+    message,
+    ...(detail === undefined ? {} : { detail }),
+    ...(params === undefined ? {} : { params }),
+  };
+  return { ok: false, errors: [error] };
+}
+
+/**
+ * Forwards a header failure unchanged.
+ *
+ * The header owns both the code and the `{year}` parameter, so the decoder must
+ * not fold them away: the UI resolves `code` + `params` to a localized message
+ * and would otherwise fall back to the (correct but English) `message`.
+ */
+function headerFailure(header: HeaderError): DecodeFailure {
+  return failure(
+    header.code,
+    header.message,
+    header.params === undefined ? {} : { params: header.params },
+  );
 }
 
 function jsonFailure(error: ValidationError): DecodeFailure {
@@ -66,7 +112,9 @@ function jsonFailure(error: ValidationError): DecodeFailure {
  * Decompresses gzip bytes into UTF-8 text.
  *
  * Invalid gzip data is `bad-gzip`; valid gzip whose content is not UTF-8 cannot
- * be a JSON document and is reported as `bad-json` (`README.md:44`).
+ * be a JSON document and is reported as `bad-json` (`README.md:44`), with the
+ * `not-utf8` detail so the UI does not attribute the validator's JSON syntax
+ * wording to it.
  */
 function gunzipToText(bytes: Uint8Array): { ok: true; text: string } | DecodeFailure {
   let inflated: Uint8Array;
@@ -74,13 +122,17 @@ function gunzipToText(bytes: Uint8Array): { ok: true; text: string } | DecodeFai
     inflated = ungzip(bytes);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    return failure('bad-gzip', `Invalid gzip data: ${reason}`);
+    return failure('bad-gzip', `Invalid gzip data: ${reason}`, { params: { reason } });
   }
 
   try {
     return { ok: true, text: new TextDecoder('utf-8', { fatal: true }).decode(inflated) };
   } catch {
-    return failure('bad-json', 'The decompressed data is not valid UTF-8, so it cannot be a JSON document.');
+    return failure(
+      'bad-json',
+      'The decompressed data is not valid UTF-8, so it cannot be a JSON document.',
+      { detail: 'not-utf8' },
+    );
   }
 }
 
@@ -91,7 +143,7 @@ function gunzipToText(bytes: Uint8Array): { ok: true; text: string } | DecodeFai
 export function chmedToJson(input: string): DecodeResult {
   const header = parseHeader(input);
   if (!header.ok) {
-    return failure(header.code, header.message);
+    return headerFailure(header);
   }
 
   let jsonText: string;

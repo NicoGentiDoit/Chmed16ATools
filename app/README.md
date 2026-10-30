@@ -69,7 +69,80 @@ Three tabs cover the whole workflow:
   product ids stay text-based (`IdType` 1).
 
 All three tabs are keyboard-operable, use labelled controls with live regions for results, and keep
-all UI text in `src/ui/strings.ts` so a later Italian localization only touches one file.
+every user-visible string in `src/ui/i18n/messages/`, behind the `text()`/`format()` helpers of
+`src/ui/i18n/` — see [Languages](#languages).
+
+## Languages
+
+The interface ships five locales as static modules bundled with the app — no fetch, no extra
+dependency, no runtime network — and a switch repaints the whole shell without a page reload.
+
+| Locale | Selector label | Dictionary |
+| --- | --- | --- |
+| `it` | Italiano | complete |
+| `de` | Deutsch | complete |
+| `fr` | Français | complete |
+| `en` | English | complete — the source of truth for keys |
+| `de-CH` | Deutsch (Schweiz) | `de` plus a four-entry delta |
+
+- **Selector.** A labelled `<select>` in the header switches the language; the static labels,
+  the home cards, the tab chips and the open panel repaint in place, and the document's `lang`
+  attribute follows. The open tab keeps its state: typed JSON or CHMED text, decoded output and
+  a running camera scan survive the switch. A result already produced (decoded JSON, findings,
+  the PDF recap) keeps the language it was produced in; the next run renders in the current one.
+- **First visit.** With nothing stored, the browser's language order decides — a `de-CH` tag
+  wins over its `de` parent, then `it`, `de`, `fr`, `en` — and an unsupported or empty
+  preference falls back to `en`. Auto-detection is not persisted, so a later browser-language
+  change is still honoured until the user chooses explicitly.
+- **Persistence.** An explicit choice is written under the `localStorage` key `chmed-locale`
+  and restored before the first paint of the next visit. Storage access is guarded: where it is
+  denied (private window, sandboxed frame) the switch still works and simply does not survive a
+  reload.
+- **Completeness is enforced.** `src/ui/i18n/messages/en.ts` is the key source; every complete
+  dictionary must carry exactly that key set, and
+  `src/ui/i18n/__tests__/completeness.test.ts` fails if a key is missing or empty. Resolution
+  is locale entry → English entry → the key name, so a gap would degrade to English rather than
+  to a blank control.
+- **`de-CH` is a delta, not a second translation.** `src/ui/i18n/messages/de-CH.ts` holds only
+  the entries that differ from `de` — currently four, all ß → ss spellings (two size-limit
+  messages and the two height/weight findings). The resolver merges it over `de` once and
+  caches the result, and the tests assert that each delta value really differs from its `de`
+  counterpart, so a copied entry fails instead of drifting. `de-CH` is a UI vocabulary variant;
+  the PDF parser stays on the `de` vocabulary.
+
+### Known limitation: engine text stays English
+
+Two kinds of English text remain untranslated in every locale, by design: the messages produced
+by the bundled JSON Schema engine (Ajv) for rules the app's own schema does not phrase itself,
+and the validator advisory wording that quotes those engine messages. The app's own findings,
+stage labels, recap and guided-task text are localized; third-party engine output is left as
+produced rather than machine-translated.
+
+### Parser vocabulary: French and Italian
+
+The PDF importer still targets the one printed paper layout documented in `chmed16a/README.md`;
+what changed is vocabulary. Its tables now recognise the French and Italian seed vocabulary that
+already existed in the matchers: the medication-table titles (`Médicament`/`Farmaco`,
+`Matin`/`Mattina`, `Midi`/`Mezzogiorno`, `Soir`/`Sera`, `Nuit`/`Notte`,
+`Quantité`/`Quantità`, `Du`/`Dal`, `Au`, `Instructions`/`Indicazioni`, `Raison`/`Motivo`,
+`Prescrit par`/`Prescritto`), the patient-block labels, the issue-date label, the
+self-medication tokens (`Automédication`, `Automedicazione`) and part of the risk vocabulary
+(`insuffisance rénale`/`insufficienza renale`, `légère`/`leggera`, `aucune`/`nessuna`, …).
+
+This is vocabulary coverage, not verified parsing:
+
+- **No French or Italian PDF has been parsed.** The repository prints the paper titles in
+  English only and points to the external IG eMediplan site for the translations, so no further
+  token could be taken from the specification. The seed tokens' behaviour is pinned by
+  vocabulary-level tests; a real FR/IT sample remains a follow-up.
+- **`Lng` stays empty for FR/IT.** Only German and English evidence is scored, so a French or
+  Italian page keeps the `''` placeholder and is flagged `language-undetected` instead of being
+  guessed as `de`.
+- **Deliberately unfilled gaps**, left open rather than invented: the Italian `Al` column title
+  (only `Fino` matches `upTo`), Italian provider/organisation labels (`prescritto da`,
+  `farmacia`, `studio`), French and Italian page markers (`Page 1 sur 1`, `Pagina 1 di 1`),
+  comment stop words and reserve-table titles beyond the German/English ones. A document
+  printing those is not supported and fails with a parse finding rather than a guess.
 
 ## Quick start
 
@@ -102,9 +175,10 @@ own GitHub remote — this checkout's `origin` still points at the upstream
 - **No backend.** There is no server component and no API call of any kind; the app is a static
   bundle of HTML, CSS and JavaScript.
 - **No telemetry and no analytics.** No third-party scripts, pixels or error reporting.
-- **No persistence.** Documents live in the form fields for the lifetime of the page; nothing is
-  written to `localStorage`, `sessionStorage`, IndexedDB or cookies. PDFs are read into memory and
-  discarded when the page is closed.
+- **No document persistence.** Documents live in the form fields for the lifetime of the page;
+  no document, extracted value or result is written to `localStorage`, `sessionStorage`,
+  IndexedDB or cookies. The only stored value is the UI language tag (`chmed-locale`, see
+  [Languages](#languages)). PDFs are read into memory and discarded when the page is closed.
 - **No document or extracted data is ever transmitted.** Encoding, decoding, validation, QR
   generation, PDF parsing and OCR are in-browser computation; uploaded QR images are read locally
   with `createImageBitmap`, PDF bytes never leave the page, and no document or extracted data is
@@ -151,7 +225,8 @@ own GitHub remote — this checkout's `origin` still points at the upstream
   fail with a parse finding ("no eMediplan prescription was found") instead of a guess. The German
   layout is the only one verified against a real PDF and a committed reference; French and Italian
   paper layouts are recognised by vocabulary only and remain ground-truth-untested — a planned
-  follow-up, not a delivered feature.
+  follow-up, not a delivered feature. [Languages](#languages) lists that vocabulary and the gaps
+  that stay open.
 - **A multi-page medication table is not recomposed.** Each page is tabulated on its own and
   joined in page order. A repeated column header is treated as a continuation, but a row that
   physically splits across a page break is not stitched back together.

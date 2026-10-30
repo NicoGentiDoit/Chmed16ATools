@@ -39,3 +39,30 @@ export function createTextareaField(
   parent.append(wrapper);
   return area;
 }
+
+/**
+ * Re-applies a field's visible label and hint in place (locale refresh).
+ *
+ * Only the text of the label and of the hint paragraph changes: the textarea,
+ * its value, its id and every listener stay untouched. `hint` is ignored when
+ * the field was created without one.
+ */
+export function setFieldLabels(
+  area: HTMLTextAreaElement,
+  labels: { readonly label: string; readonly hint?: string },
+): void {
+  const wrapper = area.closest('.field');
+  if (wrapper === null) {
+    return;
+  }
+  const label = wrapper.querySelector('label');
+  if (label !== null) {
+    label.textContent = labels.label;
+  }
+  if (labels.hint !== undefined) {
+    const hint = wrapper.querySelector('p.field-hint');
+    if (hint !== null) {
+      hint.textContent = labels.hint;
+    }
+  }
+}

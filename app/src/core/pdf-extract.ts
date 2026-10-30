@@ -975,9 +975,27 @@ export const MAX_TOTAL_TEXT_LENGTH = 2 * 1024 * 1024;
 /** Stable failure modes; mapped 1:1 by the Phase 3 pipeline. */
 export type PdfExtractErrorCode = 'not-pdf' | 'pdf-corrupt' | 'pdf-password';
 
+/**
+ * Stable sub-code of a `pdf-corrupt` failure, one per distinct bound/message.
+ *
+ * `pdf-corrupt` covers five different situations (a damaged document, the
+ * document-wide page cap, the per-page item cap, the total text cap, and a
+ * throw the pipeline maps itself), and the advice differs, so the UI resolves
+ * this detail — not the English prose — to its localized message.
+ */
+export type PdfExtractErrorMessageDetail =
+  | 'unreadable'
+  | 'page-limit'
+  | 'item-limit'
+  | 'text-limit'
+  | 'unexpected';
+
 export interface PdfExtractError {
   readonly code: PdfExtractErrorCode;
+  /** English fallback wording; the UI resolves `code`/`detail` to its locale. */
   readonly message: string;
+  /** Narrows `pdf-corrupt` to one stable message (see above). */
+  readonly detail?: PdfExtractErrorMessageDetail;
 }
 
 export interface PdfExtractedText {
@@ -1031,8 +1049,12 @@ const TOO_MANY_PAGES_MESSAGE = 'The PDF has more pages than this tool can read.'
 const TOO_MANY_ITEMS_MESSAGE = 'The PDF page has too many text items to read.';
 const TOO_MUCH_TEXT_MESSAGE = 'The PDF contains too much text to read.';
 
-function fail(code: PdfExtractErrorCode, message: string): PdfExtractResult {
-  return { ok: false, error: { code, message } };
+function fail(
+  code: PdfExtractErrorCode,
+  message: string,
+  detail?: PdfExtractErrorMessageDetail,
+): PdfExtractResult {
+  return { ok: false, error: { code, message, ...(detail === undefined ? {} : { detail }) } };
 }
 
 /** Reads the `name` property of a thrown value without trusting its shape. */
@@ -1050,7 +1072,7 @@ function classifyPdfError(error: unknown): PdfExtractError {
   if (name === 'PasswordException') {
     return { code: 'pdf-password', message: PASSWORD_MESSAGE };
   }
-  return { code: 'pdf-corrupt', message: CORRUPT_MESSAGE };
+  return { code: 'pdf-corrupt', message: CORRUPT_MESSAGE, detail: 'unreadable' };
 }
 
 /**
@@ -1118,7 +1140,7 @@ export async function extractPdfText(bytes: Uint8Array): Promise<PdfExtractResul
     const pdfDocument: PDFDocumentProxy = await loadingTask.promise;
 
     if (pdfDocument.numPages > MAX_PDF_PAGES) {
-      return fail('pdf-corrupt', TOO_MANY_PAGES_MESSAGE);
+      return fail('pdf-corrupt', TOO_MANY_PAGES_MESSAGE, 'page-limit');
     }
 
     const pages: string[] = [];
@@ -1132,7 +1154,7 @@ export async function extractPdfText(bytes: Uint8Array): Promise<PdfExtractResul
       try {
         const content = await page.getTextContent();
         if (content.items.length > MAX_PAGE_TEXT_ITEMS) {
-          return fail('pdf-corrupt', TOO_MANY_ITEMS_MESSAGE);
+          return fail('pdf-corrupt', TOO_MANY_ITEMS_MESSAGE, 'item-limit');
         }
         const annotationBudget = MAX_TOTAL_ANNOTATIONS - totalAnnotations;
         if (annotationBudget > 0) {
@@ -1161,7 +1183,7 @@ export async function extractPdfText(bytes: Uint8Array): Promise<PdfExtractResul
         }
         totalLength += pageText.length + pageTabulated.length + PDF_PAGE_SEPARATOR.length;
         if (totalLength > MAX_TOTAL_TEXT_LENGTH) {
-          return fail('pdf-corrupt', TOO_MUCH_TEXT_MESSAGE);
+          return fail('pdf-corrupt', TOO_MUCH_TEXT_MESSAGE, 'text-limit');
         }
         pages.push(pageText);
         tabulatedPages.push(pageTabulated);

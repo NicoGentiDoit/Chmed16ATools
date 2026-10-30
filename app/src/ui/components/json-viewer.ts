@@ -49,6 +49,16 @@ export interface JsonViewerHandle {
   render(value: unknown, options?: JsonViewerOptions): void;
   /** Empties the view (the DOM nodes are dropped, not hidden). */
   clear(): void;
+  /**
+   * Re-resolves the labels that are not document content for the current locale.
+   *
+   * In place, like the other components' `relabel`: the section hints, the
+   * missing-required badge and the region's accessible name change, while every
+   * `<details>` keeps its node and its open/closed state. Section titles are the
+   * document's own keys and are never re-worded. Nothing has been rendered yet
+   * (or the view was cleared) → only the accessible name is rewritten.
+   */
+  relabel(): void;
 }
 
 /** Optional presentation inputs for the viewer (defaults: none). */
@@ -193,8 +203,22 @@ function topLevelSections(value: unknown): JsonSection[] {
   return [{ title: text('jsonDocumentSection'), value }];
 }
 
+/**
+ * One painted disclosure plus the label nodes `relabel` rewrites in place.
+ *
+ * `hint` is the translated type/size hint and `value` is the value it describes;
+ * a whole-section placeholder has no content, hence no hint. `markLabel` is the
+ * word half of the missing-required badge, when the section carries one.
+ */
+interface PaintedSection {
+  readonly node: HTMLElement;
+  readonly hint: HTMLElement | null;
+  readonly value: unknown;
+  readonly markLabel: HTMLElement | null;
+}
+
 /** One `<details>` with its summary and highlighted `<pre>`. */
-function createSection(title: string, value: unknown, missing: boolean): HTMLElement {
+function createSection(title: string, value: unknown, missing: boolean): PaintedSection {
   const details = el('details', 'json-section');
   // Every section starts collapsed: a native `<details>` without `open` is
   // closed by default, so the summary alone is shown until the user expands it.
@@ -205,8 +229,9 @@ function createSection(title: string, value: unknown, missing: boolean): HTMLEle
   const hintNode = el('span', 'json-section-hint');
   hintNode.textContent = `(${describeValue(value)})`;
   summary.append(titleNode, hintNode);
-  if (missing) {
-    summary.append(createMissingMark());
+  const mark = missing ? createMissingMark() : null;
+  if (mark !== null) {
+    summary.append(mark.node);
   }
 
   const code = el('pre', 'json-code');
@@ -215,7 +240,13 @@ function createSection(title: string, value: unknown, missing: boolean): HTMLEle
   code.innerHTML = highlightJson(formatJson(value));
 
   details.append(summary, code);
-  return details;
+  return { node: details, hint: hintNode, value, markLabel: mark?.label ?? null };
+}
+
+/** A painted missing-required badge: its node plus the word node it carries. */
+interface MissingMark {
+  readonly node: HTMLElement;
+  readonly label: HTMLElement;
 }
 
 /**
@@ -225,8 +256,10 @@ function createSection(title: string, value: unknown, missing: boolean): HTMLEle
  * No `PanelIconName` in `buttons.ts` conveys absence, and adding one is outside
  * this phase's file scope, so the marker is a text glyph in a span (`aria-hidden`,
  * because the words right after it carry the meaning) followed by the label.
+ * The returned `label` is kept so `relabel` can re-word it without rebuilding
+ * the badge.
  */
-function createMissingMark(): HTMLElement {
+function createMissingMark(): MissingMark {
   const mark = el('span', 'json-section-missing');
   const glyph = el('span', 'json-section-missing-icon');
   glyph.setAttribute('aria-hidden', 'true');
@@ -234,7 +267,7 @@ function createMissingMark(): HTMLElement {
   const label = el('span', 'json-section-missing-label');
   label.textContent = text('jsonMissingRequired');
   mark.append(glyph, label);
-  return mark;
+  return { node: mark, label };
 }
 
 /**
@@ -244,17 +277,18 @@ function createMissingMark(): HTMLElement {
  * and an empty section needs no `<pre>` content. This is the only way a missing
  * WHOLE section can be marked, since it has no `<details>` of its own.
  */
-function createMissingSection(title: string): HTMLElement {
+function createMissingSection(title: string): PaintedSection {
   // Native `<details>` default: no `open`, so the placeholder starts collapsed too.
   const details = el('details', 'json-section json-section-absent');
 
   const summary = el('summary', 'json-section-summary');
   const titleNode = el('span', 'json-section-title');
   titleNode.textContent = title;
-  summary.append(titleNode, createMissingMark());
+  const mark = createMissingMark();
+  summary.append(titleNode, mark.node);
 
   details.append(summary);
-  return details;
+  return { node: details, hint: null, value: undefined, markLabel: mark.label };
 }
 
 /**
@@ -273,11 +307,14 @@ export function createJsonViewer(
   root.setAttribute('aria-label', text('jsonOutputLabel'));
   container.append(root);
 
+  /** The disclosures last painted, so `relabel` can re-word their labels. */
+  let painted: readonly PaintedSection[] = [];
+
   const render = (value: unknown, options?: JsonViewerOptions): void => {
     const missingSections = options?.missingSections ?? defaults.missingSections;
     const sections = topLevelSections(value);
     const present = new Set(sections.map((section) => section.title));
-    const nodes = sections.map((section) =>
+    const paintedSections = sections.map((section) =>
       createSection(
         section.title,
         section.value,
@@ -290,16 +327,30 @@ export function createJsonViewer(
       // document's own order is never reshuffled.
       for (const title of missingSections) {
         if (!present.has(title)) {
-          nodes.push(createMissingSection(title));
+          paintedSections.push(createMissingSection(title));
         }
       }
     }
-    root.replaceChildren(...nodes);
+    painted = paintedSections;
+    root.replaceChildren(...paintedSections.map((section) => section.node));
+  };
+
+  const relabel = (): void => {
+    root.setAttribute('aria-label', text('jsonOutputLabel'));
+    for (const section of painted) {
+      if (section.hint !== null) {
+        section.hint.textContent = `(${describeValue(section.value)})`;
+      }
+      if (section.markLabel !== null) {
+        section.markLabel.textContent = text('jsonMissingRequired');
+      }
+    }
   };
 
   const clear = (): void => {
     root.replaceChildren();
+    painted = [];
   };
 
-  return { render, clear };
+  return { render, clear, relabel };
 }

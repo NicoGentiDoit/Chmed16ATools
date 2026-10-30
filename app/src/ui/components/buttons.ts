@@ -52,3 +52,41 @@ export function createButtonWithIcon(
   parent.append(button);
   return button;
 }
+
+/**
+ * Replaces the visible text of a button built by {@link createButtonWithIcon}.
+ *
+ * The icon markup (Lucide's `<i>` or the SVG it was swapped for) stays in place;
+ * only the trailing text node and the accessible name change. `accessibleName`
+ * defaults to the visible label, exactly like the factory.
+ */
+export function setButtonLabel(
+  button: HTMLButtonElement,
+  labelText: string,
+  accessibleName?: string,
+): void {
+  const last = button.lastChild;
+  if (last instanceof Text) {
+    last.textContent = ` ${labelText}`;
+  } else {
+    button.append(document.createTextNode(` ${labelText}`));
+  }
+  button.setAttribute('aria-label', accessibleName ?? labelText);
+}
+
+/**
+ * Replaces the text of a label whose leading icon was injected as markup.
+ *
+ * A `<label>` that carries a Lucide icon cannot be relabelled with
+ * `textContent` (that would drop the icon), so this rewrites only its trailing
+ * text node — the same technique {@link setButtonLabel} uses for buttons. Used
+ * by the locale refresh, where only words may change.
+ */
+export function setLeadingIconLabel(label: HTMLElement, value: string): void {
+  const last = label.lastChild;
+  if (last instanceof Text) {
+    last.textContent = value;
+    return;
+  }
+  label.append(document.createTextNode(value));
+}

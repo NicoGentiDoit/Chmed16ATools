@@ -13,7 +13,9 @@
  * followed by a native "Technical details" disclosure that keeps the original
  * prose of every level byte-identical. Only the PDF panel opts in; flows 1 and 2
  * keep calling `render` exactly as before, so their DOM is unchanged. This layer
- * is presentation only: it never classifies, gates or re-words a finding.
+ * is presentation only: it never classifies, gates or re-words a finding. The
+ * field nouns it names come from the locale dictionaries (`taskField*` keys), so
+ * a language switch relabels the task copy through `relabel` below.
  *
  * The same flag turns on stable item ids (`task-row-N`, `finding-error-N`, ...)
  * which the review table uses for `aria-describedby`; the id builders are
@@ -54,6 +56,7 @@
  */
 
 import { format, text } from '../strings';
+import type { UiStringKey } from '../strings';
 import { el } from './dom';
 
 /** A validation finding flattened for rendering. */
@@ -150,6 +153,16 @@ export interface FindingsView {
   ): void;
   /** Shows a single neutral message instead of findings. */
   message(value: string): void;
+  /**
+   * Re-resolves every label for the current locale.
+   *
+   * Unlike `render`, a locale change is presentation-only, so this replaces the
+   * painted nodes (through the same authoring path) instead of updating them in
+   * place: the empty-state wording and the `details` summary are text nodes a
+   * refresh cannot rewrite without rebuilding. A message state has no labels of
+   * its own and is left to the caller, which re-issues its key.
+   */
+  relabel(headingText: string): void;
 }
 
 /** Variant used for both the level heading and its list. */
@@ -165,19 +178,21 @@ type FindingIconName = 'circle-alert' | 'triangle-alert' | 'info' | 'circle-chec
 /**
  * Human wording for the object/property a missing-required finding names.
  *
- * The task label only needs a short, readable noun; unknown keys fall back to
- * the raw JSON key (which the technical details spell out anyway), so a schema
- * addition can never blank a task.
+ * The task label only needs a short, readable noun, so the map holds dictionary
+ * KEYS rather than text: the nouns ("patient", "birthdate", ...) are part of the
+ * guided-task copy, which must follow the selected locale like every other
+ * label. Unknown keys fall back to the raw JSON key (which the technical details
+ * spell out anyway), so a schema addition can never blank a task.
  */
-const TASK_FIELD_LABELS: Readonly<Record<string, string>> = {
-  Patient: 'patient',
-  Medicaments: 'medicament',
-  FName: 'first name',
-  LName: 'last name',
-  BDt: 'birthdate',
-  Gln: 'GLN',
-  Name: 'name',
-  Id: 'medicament id',
+const TASK_FIELD_LABELS: Readonly<Record<string, UiStringKey>> = {
+  Patient: 'taskFieldPatient',
+  Medicaments: 'taskFieldMedicaments',
+  FName: 'taskFieldFName',
+  LName: 'taskFieldLName',
+  BDt: 'taskFieldBDt',
+  Gln: 'taskFieldGln',
+  Name: 'taskFieldName',
+  Id: 'taskFieldId',
 };
 
 /**
@@ -224,14 +239,14 @@ function taskSectionDataLabel(finding: Finding): string | null {
   }
   const section = taskSectionKey(finding);
   const rendered = RENDERED_REQUIRED_FIELDS[section];
-  const name = TASK_FIELD_LABELS[section];
-  if (rendered === undefined || name === undefined) {
+  const nameKey = TASK_FIELD_LABELS[section];
+  if (rendered === undefined || nameKey === undefined) {
     return null;
   }
   if (missing === section || rendered.includes(missing)) {
     return null;
   }
-  return name;
+  return text(nameKey);
 }
 
 /** Readable noun for a guided task ("patient", "birthdate", ...). */
@@ -240,7 +255,8 @@ function taskFieldLabel(finding: Finding): string {
   if (missing === undefined) {
     return lastPathSegment(finding.path);
   }
-  return TASK_FIELD_LABELS[missing] ?? missing;
+  const nameKey = TASK_FIELD_LABELS[missing];
+  return nameKey === undefined ? missing : text(nameKey);
 }
 
 /**
@@ -441,6 +457,7 @@ export function createFindingsView(
   const message = (value: string): void => {
     container.replaceChildren();
     painted = null;
+    lastInput = null;
     const paragraph = el('p', 'findings-summary');
     paragraph.textContent = value;
     container.append(paragraph);
@@ -448,6 +465,17 @@ export function createFindingsView(
 
   /** What the container currently holds; see {@link Painted}. */
   let painted: Painted | null = null;
+
+  /**
+   * The findings last handed to `render`, kept so `relabel` can rebuild the
+   * labels without the caller re-supplying them. `null` while a message is
+   * shown, because a message has no level labels to re-resolve.
+   */
+  let lastInput: {
+    readonly errors: readonly Finding[];
+    readonly warnings: readonly Finding[];
+    readonly successes: readonly Finding[];
+  } | null = null;
 
   /** One level of the model; ids follow the shared 1-based formula. */
   const renderedLevel = (
@@ -758,10 +786,19 @@ export function createFindingsView(
     warnings: readonly Finding[],
     successes: readonly Finding[] = [],
   ): void => {
+    lastInput = { errors, warnings, successes };
     sync(buildRendered(errors, warnings, successes));
   };
 
-  return { render, message };
+  const relabel = (headingText: string): void => {
+    heading.textContent = headingText;
+    if (lastInput === null) {
+      return;
+    }
+    paint(buildRendered(lastInput.errors, lastInput.warnings, lastInput.successes));
+  };
+
+  return { render, message, relabel };
 }
 
 /** Static Lucide placeholder; `createIcons` swaps it for the inline SVG. */

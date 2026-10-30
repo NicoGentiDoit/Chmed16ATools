@@ -7,8 +7,13 @@ import realGermanFixture from './fixtures/emediplan-paper-rx-real-de.txt?raw';
 import minimalFixture from './fixtures/emediplan-paper-rx-minimal.txt?raw';
 import singleMedicamentFixture from './fixtures/emediplan-paper-rx.txt?raw';
 import twoMedicamentsFixture from './fixtures/emediplan-paper-rx-two-meds.txt?raw';
-import { mapAnnotationsToRows, parsePrescriptionText } from '../prescription-parse';
+import {
+  columnKeyFor,
+  mapAnnotationsToRows,
+  parsePrescriptionText,
+} from '../prescription-parse';
 import type {
+  ColumnKey,
   PdfLinkAnnotation,
   PdfRowGeometry,
   PrescriptionParseResult,
@@ -417,7 +422,13 @@ describe('parsePrescriptionText', () => {
       const result = expectFailure(parsePrescriptionText(minimalFixture));
 
       expect(result.errors).toEqual([
-        { code: 'invalid-value', path: '/Id', message: expect.stringContaining('crypto') },
+        {
+          code: 'invalid-value',
+          path: '/Id',
+          // i18n plan 007 phase 8: the finding carries its stable sub-code.
+          detail: 'no-crypto',
+          message: expect.stringContaining('crypto'),
+        },
       ]);
     } finally {
       vi.unstubAllGlobals();
@@ -679,6 +690,8 @@ describe('real German eMediplan sample (geometry-tabulated text)', () => {
         {
           code: 'unknown-field',
           path: '/Medicaments/4/Roa',
+          // i18n plan 007 phase 8: stable sub-code for the localized template.
+          detail: 'route-undetermined',
           message: expect.stringContaining('"Roa" is omitted'),
         },
       ]),
@@ -740,17 +753,41 @@ describe('real German eMediplan sample (geometry-tabulated text)', () => {
       {
         code: 'unknown-field',
         path: '/Medicaments/4/Roa',
+        // i18n plan 007 phase 8: stable sub-codes for the localized templates.
+        detail: 'route-undetermined',
         message: expect.stringContaining('"Roa" is omitted'),
       },
       {
         code: 'unknown-field',
         path: '/Patient/Med/Rc',
+        detail: 'diabetes-unknown',
+        params: { value: 'Unbekannt' },
         message: expect.stringContaining('"Unbekannt"'),
       },
     ]);
     // Every warning is a genuinely unmappable printed item, never a validator
     // error.
     expect(warnings.every((warning) => warning.code === 'unknown-field')).toBe(true);
+  });
+
+  it('gives every parser warning a stable sub-code and only printed values as params', () => {
+    // i18n plan 007 phase 8: the UI localizes by `detail`, so a parser warning
+    // without one would silently stay English. `params` carries nothing but
+    // values the document printed (the echoed raw text), never prose.
+    const { warnings } = expectSuccess(parsePrescriptionText(realGermanFixture));
+
+    expect(warnings.every((warning) => warning.detail !== undefined)).toBe(true);
+    expect(warnings.map((warning) => warning.detail).sort()).toEqual([
+      'diabetes-unknown',
+      'route-undetermined',
+    ]);
+    expect(warnings.find((warning) => warning.detail === 'diabetes-unknown')?.params).toEqual({
+      value: 'Unbekannt',
+    });
+    // The route advisory interpolates nothing: its wording names the JSON key.
+    expect(warnings.find((warning) => warning.detail === 'route-undetermined')?.params).toBe(
+      undefined,
+    );
   });
 
   it('validates as a Medication Plan with no validator warnings and no provider identity', () => {
@@ -1279,6 +1316,8 @@ describe('patient medical data, language, remark and issue time (phase 3)', () =
         {
           code: 'unknown-field',
           path: '/Patient/Med/Meas',
+          // i18n plan 007 phase 8: one sub-code per missing member.
+          detail: 'missing-weight',
           message: expect.stringContaining('weight'),
         },
       ]),
@@ -1305,6 +1344,9 @@ describe('patient medical data, language, remark and issue time (phase 3)', () =
         {
           code: 'unknown-field',
           path: '/Patient/Med/Rc',
+          // i18n plan 007 phase 8: stable sub-code plus the printed value.
+          detail: 'diabetes-unknown',
+          params: { value: 'Unbekannt' },
           message: expect.stringContaining('"Unbekannt"'),
         },
       ]),
@@ -1322,6 +1364,9 @@ describe('patient medical data, language, remark and issue time (phase 3)', () =
         {
           code: 'unknown-field',
           path: '/Patient/Med/Rc',
+          // i18n plan 007 phase 8: stable sub-code plus the printed value.
+          detail: 'allergy-unknown',
+          params: { value: 'Erdbeeren' },
           message: expect.stringContaining('Erdbeeren'),
         },
       ]),
@@ -1462,6 +1507,8 @@ describe('patient medical data, language, remark and issue time (phase 3)', () =
         {
           code: 'unknown-field',
           path: '/Patient/Lng',
+          // i18n plan 007 phase 8: stable sub-code for the localized template.
+          detail: 'language-undetected',
           message: expect.stringContaining('i18n'),
         },
       ]),
@@ -1625,5 +1672,272 @@ describe('link-annotation identity (phase 4)', () => {
     expect(value.Medicaments?.[3]?.IdType).toBe(1);
     expect(value.Medicaments?.[3]?.Id).toContain('PANADOL');
     expect(value.Medicaments?.[4]).toMatchObject({ Id: 'Essigwickel', IdType: 1 });
+  });
+});
+
+/**
+ * Plan 007 phase 9 — FR/IT printed vocabulary, vocabulary level only.
+ *
+ * Source of truth: the paper-layout section of `chmed16a/README.md:1691-1769`
+ * prints the column, patient and provider titles in English only, and
+ * `README.md:1771-1786` says the printed translations are published on the
+ * external IG eMediplan site — not in this repository, and never fetched here.
+ * No FR/IT title can therefore be *added* from the spec: the French/Italian
+ * tokens below are the seed vocabulary that already existed in the matcher
+ * tables. These tests pin their behaviour so an FR/IT document has defined
+ * semantics and a regression is caught, and they pin the gaps that stay open.
+ * No real FR/IT paper has been parsed (follow-up: ground-truth samples).
+ */
+describe('FR/IT printed vocabulary (phase 9, vocabulary only)', () => {
+  const frHeader =
+    'Médicament | Matin | Midi | Soir | Nuit | Quantité | Du | Au | Instructions | Raison | Prescrit par';
+  const itHeader =
+    'Farmaco | Mattina | Mezzogiorno | Sera | Notte | Quantità | Dal | Al | Indicazioni | Motivo | Prescritto';
+
+  const frRow =
+    'Ramipril 5 mg | 1 | - | - | - | Stück | 01.09.2026 | - | après le repas | Hypertension | Dr. med. A Muster';
+  const itRow =
+    'Ramipril 5 mg | 1 | - | - | - | Stk | 01.09.2026 | - | dopo i pasti | Ipertensione | Dr. med. A Muster';
+
+  it('maps the seed French and Italian column titles', () => {
+    const cases: ReadonlyArray<readonly [string, ColumnKey]> = [
+      ['Médicament', 'medication'],
+      ['Matin', 'morning'],
+      ['Midi', 'noon'],
+      ['Soir', 'evening'],
+      ['Nuit', 'night'],
+      ['Quantité', 'quantity'],
+      ['Du', 'from'],
+      ['Au', 'upTo'],
+      // `Instructions` is the same word in French, so the English matcher covers it.
+      ['Instructions', 'instructions'],
+      ['Raison', 'reason'],
+      ['Prescrit par', 'prescribedBy'],
+      ['Farmaco', 'medication'],
+      ['Mattina', 'morning'],
+      ['Mezzogiorno', 'noon'],
+      ['Sera', 'evening'],
+      ['Notte', 'night'],
+      ['Quantità', 'quantity'],
+      ['Dal', 'from'],
+      ['Indicazioni', 'instructions'],
+      ['Motivo', 'reason'],
+      ['Prescritto', 'prescribedBy'],
+    ];
+
+    for (const [title, key] of cases) {
+      expect(columnKeyFor(title), `printed title "${title}"`).toBe(key);
+    }
+  });
+
+  it('casefolds and trims accented titles like the German ones', () => {
+    // The shared pipeline is `trim` + the `u`/`i` regexp flags, so an upper-case
+    // precomposed accent folds onto the lower-case token.
+    expect(columnKeyFor('  MÉDICAMENT  ')).toBe('medication');
+    expect(columnKeyFor('QUANTITÉ')).toBe('quantity');
+    expect(columnKeyFor('Médicament 100 mg')).toBe('medication');
+  });
+
+  it('reads the seed French patient block labels and the issue-date label', () => {
+    const { value } = expectSuccess(
+      parsePrescriptionText(
+        [
+          'Prénom: Jean',
+          'Nom: Dupont',
+          'Date de naissance: 05.05.1980 (M)',
+          'Rue: Grand-Rue',
+          'Code postal: 1201',
+          'Ville: Genève',
+          "Date d'émission: 29.10.2026 09:42",
+          frHeader,
+          frRow,
+        ].join('\n'),
+      ),
+    );
+
+    expect(value.Patient).toMatchObject({
+      FName: 'Jean',
+      LName: 'Dupont',
+      BDt: '1980-05-05',
+      Gender: 1,
+      Street: 'Grand-Rue',
+      Zip: '1201',
+      City: 'Genève',
+    });
+    expect(value.Dt).toBe('2026-10-29T09:42:00+01:00');
+  });
+
+  it('reads the seed Italian patient block labels and the issue-date label', () => {
+    const { value } = expectSuccess(
+      parsePrescriptionText(
+        [
+          'Nome: Mario',
+          'Cognome: Rossi',
+          'Data di nascita: 05.05.1980 (M)',
+          'Sesso: M',
+          'Via: Via Roma',
+          'CAP: 6900',
+          'Località: Lugano',
+          'Data di emissione: 29.10.2026 09:42',
+          itHeader,
+          itRow,
+        ].join('\n'),
+      ),
+    );
+
+    expect(value.Patient).toMatchObject({
+      FName: 'Mario',
+      LName: 'Rossi',
+      BDt: '1980-05-05',
+      Gender: 1,
+      Street: 'Via Roma',
+      Zip: '6900',
+      City: 'Lugano',
+    });
+    expect(value.Dt).toBe('2026-10-29T09:42:00+01:00');
+  });
+
+  it('keeps the empty Lng placeholder for FR/IT instead of guessing a language', () => {
+    // Documented limitation (the code comment says detection is deferred): only
+    // German and English evidence is scored, so a French page warns and keeps
+    // the required `''` placeholder rather than being invented as `de`.
+    const result = expectSuccess(
+      parsePrescriptionText(
+        [
+          'Prénom: Jean',
+          'Nom: Dupont',
+          'Date de naissance: 05.05.1980 (M)',
+          "Date d'émission: 29.10.2026 09:42",
+          frHeader,
+          frRow,
+        ].join('\n'),
+      ),
+    );
+
+    expect(result.value.Patient.Lng).toBe('');
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'unknown-field',
+          path: '/Patient/Lng',
+          detail: 'language-undetected',
+        }),
+      ]),
+    );
+  });
+
+  it('consumes the seed French provider labels without fabricating a provider', () => {
+    const { value } = expectSuccess(
+      parsePrescriptionText(
+        [
+          'Prescrit par: Dr. med. A Muster',
+          'Pharmacie: Pharmacie Centrale',
+          'Prénom: Jean',
+          'Nom: Dupont',
+          'Date de naissance: 05.05.1980 (M)',
+          "Date d'émission: 29.10.2026 09:42",
+          frHeader,
+          frRow,
+        ].join('\n'),
+      ),
+    );
+
+    // MP has no provider identity: no printed GLN keeps the explicit marker.
+    expect(value.Auth).toBe('patient');
+  });
+
+  it('treats the French and Italian self-medication tokens like the German one', () => {
+    const cases: ReadonlyArray<readonly [string, string, string]> = [
+      ['Automédication', 'Fièvre', frHeader],
+      ['Automedicazione', 'Febbre', itHeader],
+    ];
+
+    for (const [marker, reason, header] of cases) {
+      // Glued cell: the marker names the prescriber cell, the trailing printed
+      // reason is recovered because the Reason cell is empty.
+      const { value } = expectSuccess(
+        parsePrescriptionText(
+          [
+            'Jean Dupont',
+            'Date de naissance: 05.05.1980 (M)',
+            "Date d'émission: 29.10.2026 09:42",
+            header,
+            `Ibu 400 mg | 1 | - | - | - | Stk | 01.09.2026 | - | après le repas |  | ${marker} ${reason}`,
+          ].join('\n'),
+        ),
+      );
+
+      const medicament = value.Medicaments?.[0];
+      expect(medicament?.AutoMed, `self-medication marker "${marker}"`).toBe(1);
+      expect(medicament).not.toHaveProperty('PrscbBy');
+      expect(medicament?.TkgRsn).toBe(reason);
+    }
+  });
+
+  it('keeps the start anchor: a French value that merely contains the token is an author', () => {
+    const { value } = expectSuccess(
+      parsePrescriptionText(
+        [
+          'Jean Dupont',
+          'Date de naissance: 05.05.1980 (M)',
+          "Date d'émission: 29.10.2026 09:42",
+          frHeader,
+          'Ibu 400 mg | 1 | - | - | - | Stk | 01.09.2026 | - | après le repas | Fièvre | Dr. Automédication',
+        ].join('\n'),
+      ),
+    );
+
+    const medicament = value.Medicaments?.[0];
+    expect(medicament).not.toHaveProperty('AutoMed');
+    expect(medicament?.PrscbBy).toBe('Dr. Automédication');
+  });
+
+  it('reads the French "voir les instructions" dose cell as a cross-reference', () => {
+    const { value } = expectSuccess(
+      parsePrescriptionText(
+        [
+          'Jean Dupont',
+          'Date de naissance: 05.05.1980 (M)',
+          "Date d'émission: 29.10.2026 09:42",
+          frHeader,
+          'Ibu 400 mg | voir les instructions |  |  |  | - |  |  | après le repas | Fièvre | Automédication',
+        ].join('\n'),
+      ),
+    );
+
+    expect(value.Medicaments?.[0]).toMatchObject({
+      AppInstr: 'après le repas',
+      TkgRsn: 'Fièvre',
+      AutoMed: 1,
+    });
+    expect(value.Medicaments?.[0]?.Pos).toBeUndefined();
+  });
+
+  it('maps the French risk names quoted by the spec to their risk ids', () => {
+    // `chmed16a/README.md:823-849` prints the French names
+    // (`Insuffisance rénale, légère|modérée|sévère|terminale`); the stage word
+    // decides the risk id inside risk category 1.
+    const cases: ReadonlyArray<readonly [string, number]> = [
+      ['légère', 577],
+      ['modérée', 576],
+      ['sévère', 575],
+      ['terminale', 597],
+    ];
+
+    for (const [stage, id] of cases) {
+      const { value } = expectSuccess(
+        parsePrescriptionText(
+          [
+            'Jean Dupont',
+            'Date de naissance: 05.05.1980 (M)',
+            `Insuffisance rénale: ${stage}`,
+            "Date d'émission: 29.10.2026 09:42",
+            frHeader,
+            frRow,
+          ].join('\n'),
+        ),
+      );
+      expect(value.Patient.Med?.Rc, `French renal stage "${stage}"`).toEqual([{ Id: 1, R: [id] }]);
+    }
   });
 });

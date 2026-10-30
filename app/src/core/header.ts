@@ -33,7 +33,14 @@ export type HeaderErrorCode = 'bad-prefix' | 'unknown-year' | 'bad-compression';
 export interface HeaderError {
   readonly ok: false;
   readonly code: HeaderErrorCode;
+  /** English fallback wording; the UI resolves `code` (+ `params`) to its locale. */
   readonly message: string;
+  /**
+   * Values a localized template interpolates (`{year}`). Locale-agnostic and
+   * optional: the UI never reads them from prose, and the English `message`
+   * stays complete on its own, so a caller that ignores `params` loses nothing.
+   */
+  readonly params?: Readonly<Record<string, string | number>>;
 }
 
 /**
@@ -47,8 +54,12 @@ const CHMED16_PATTERN = /^CHMED16([A-Z])([0-1])([\s\S]*)$/i;
 const RELEASE_YEAR_PATTERN = /^CHMED(\d{2})/i;
 const SUB_VERSION_PATTERN = /^CHMED16[A-Z]/i;
 
-function headerError(code: HeaderErrorCode, message: string): HeaderError {
-  return { ok: false, code, message };
+function headerError(
+  code: HeaderErrorCode,
+  message: string,
+  params?: Readonly<Record<string, string | number>>,
+): HeaderError {
+  return { ok: false, code, message, ...(params === undefined ? {} : { params }) };
 }
 
 /**
@@ -67,6 +78,7 @@ export function parseHeader(input: string): Header | HeaderError {
     return headerError(
       'unknown-year',
       `ReleaseYear ${year[1] ?? '?'} is not defined by ChTransmissionFormat; only 16 is supported (chtransmissionformat/README.md:74).`,
+      { year: year[1] ?? '?' },
     );
   }
 

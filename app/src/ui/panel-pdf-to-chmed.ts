@@ -142,6 +142,27 @@
  * document's memory as well. The OCR worker is created and terminated *inside*
  * `runOcr`, so the panel never holds a worker of its own; it is torn down when
  * the pipeline call settles.
+ *
+ * ## Locale refresh (i18n plan 007, phase 5)
+ *
+ * `refresh()` re-applies this panel's labels for the current locale and keeps
+ * every piece of state: the retained PDF bytes, the first-page preview, the JSON
+ * textarea (pipeline output or the edited document), the review table's values
+ * and any in-progress edit, the CHMED16A string, the QR symbol and the draft
+ * banner. It calls no pipeline and no reset: it rewrites text and accessible
+ * names and re-derives the four `format()`ed texts (status line, preview failure,
+ * draft heading, export recap) from state the panel already tracks.
+ *
+ * ## Core finding wording (i18n plan 007, phases 7 and 8)
+ *
+ * `pdf-to-prescription.ts`, `pdf-extract.ts`, the OCR notice and
+ * `prescription-parse.ts` return stable codes (with a `detail` where one code
+ * covers several messages), so `ui/i18n/core-message.ts` resolves them to the
+ * locale at paint time. The schema engine's own text (Ajv messages,
+ * `instancePath` pointers) and the validator's placeholder advisories are
+ * deliberately left English, and the pipeline's defensive `internal` finding is
+ * mapped because the pipeline authors it. Findings already on screen are result
+ * snapshots, so `refresh()` does not re-translate them; the next run does.
  */
 
 import { jsonToChmed } from '../core/encode';
@@ -157,20 +178,29 @@ import { generateQr, qrToSvg } from '../core/qr-generate';
 import type { QrEcLevel } from '../core/qr-generate';
 import { validateJsonText } from '../core/validate';
 import type { ValidationError, ValidationResult, ValidationWarning } from '../core/validate';
-import { createButtonWithIcon, svg } from './components/buttons';
+import { createButtonWithIcon, setButtonLabel, setLeadingIconLabel, svg } from './components/buttons';
 import { copyText, downloadText } from './components/clipboard';
 import { el } from './components/dom';
-import { createTextareaField } from './components/fields';
+import { createTextareaField, setFieldLabels } from './components/fields';
 import { createFindingsView, focusAnchorTarget } from './components/findings';
 import type { Finding } from './components/findings';
 import { createJsonViewer } from './components/json-viewer';
 import { createReviewTable } from './components/review-table';
 import type { ReviewEdit, ReviewFinding, ReviewPrescription } from './components/review-table';
+import { coreMessageText } from './i18n/core-message';
 import { format, text } from './strings';
+import type { UiStringKey } from './strings';
 
 export interface Panel {
   /** Releases resources held by the panel. */
   dispose(): void;
+  /**
+   * Re-applies every label of the panel for the current locale without
+   * rebuilding it: the retained PDF bytes, the first-page preview, the extracted
+   * or edited JSON, every review-table value and the encoded output (string and
+   * QR symbol) are all kept as they are.
+   */
+  refresh?(): void;
 }
 
 const EC_LEVELS: readonly QrEcLevel[] = ['L', 'M', 'Q', 'H'];
@@ -198,7 +228,11 @@ const ANCHOR_TARGET_IDS = {
 type AnchorArea = keyof typeof ANCHOR_TARGET_IDS;
 
 function warningFindings(warnings: readonly PdfToPrescriptionWarning[]): Finding[] {
-  return warnings.map((warning) => ({ path: warning.path, message: warning.message }));
+  // Parser warnings carry a `detail` and follow the locale; schema warnings
+  // carry codes no core mapping knows and keep their English text (out of
+  // scope). The pipeline's own `ocr-low-confidence` notice is a mapped code.
+  // The fallback chain makes all three one call.
+  return warnings.map((warning) => ({ path: warning.path, message: coreMessageText(warning) }));
 }
 
 /**
@@ -230,15 +264,48 @@ function failureFindings(failure: PdfToPrescriptionFailure): Finding[] {
   switch (failure.stage) {
     case 'extract':
     case 'ocr':
-      return failure.errors.map((error) => ({ path: error.code, message: error.message }));
+      // Extract/OCR errors carry a stable code (plus a `detail` for the reader
+      // bounds), so the wording comes from the locale, not from core prose.
+      return failure.errors.map((error) => ({
+        path: error.code,
+        message: coreMessageText(error),
+      }));
     case 'parse':
-      return failure.errors.map((error) => ({ path: error.path, message: error.message }));
+      // Parser findings carry a stable `detail` sub-code (plus the printed
+      // values as `params`), so the wording comes from the locale. The `path`
+      // stays the parser's JSON Pointer: it is what the anchor resolver and the
+      // guided tasks point at.
+      return failure.errors.map((error) => ({
+        path: error.path,
+        message: coreMessageText(error),
+      }));
     case 'validate':
     case 'encode':
-      return failure.errors.map(validationFinding);
+      return failure.errors.map(pipelineValidationFinding);
     default:
       return [];
   }
+}
+
+/**
+ * A validate/encode finding as display text.
+ *
+ * The schema engine's text (`required`, `type`, `enum`, ...) is out of this
+ * phase's scope and stays English. The one exception is the pipeline's own
+ * defensive finding (`keyword: 'internal'`, a stage that threw): it is prose
+ * `pdf-to-prescription.ts` authors itself, mapped like a code. Inline edits
+ * report their own failure through a different path (`errorFindings`), so this
+ * mapping can never overwrite `reviewInvalidEdit`.
+ */
+function pipelineValidationFinding(error: ValidationError): Finding {
+  if (error.keyword === 'internal') {
+    return {
+      path: error.instancePath,
+      message: coreMessageText({ code: 'internal' }),
+      keyword: error.keyword,
+    };
+  }
+  return validationFinding(error);
 }
 
 /**
@@ -273,12 +340,19 @@ function warningReviewFindings(warnings: readonly PdfToPrescriptionWarning[]): R
   }));
 }
 
-function stageMessage(failure: PdfToPrescriptionFailure): string {
+/**
+ * The key of the status line for a typed pipeline failure.
+ *
+ * Returns a key, not resolved text: the panel repaints its status line on a
+ * locale change, and the wording is derived from the failure the panel still
+ * holds (`statusSource`), so re-resolving must go through the same switch.
+ */
+function stageMessage(failure: PdfToPrescriptionFailure): UiStringKey {
   switch (failure.stage) {
     case 'extract':
-      return text('pdfStageExtract');
+      return 'pdfStageExtract';
     case 'ocr':
-      return text('pdfStageOcr');
+      return 'pdfStageOcr';
     case 'parse':
       // The parse stage owns two different outcomes: an unrecognized layout
       // (nothing that looks like a printed eMediplan table) and a recognized
@@ -286,14 +360,14 @@ function stageMessage(failure: PdfToPrescriptionFailure): string {
       // or `missing-field`). Only the first deserves the "no prescription"
       // wording; the second must stay truthful about what was found.
       return failure.errors.some((error) => error.code === 'unsupported-layout')
-        ? text('pdfStageParse')
-        : text('pdfStageParseValues');
+        ? 'pdfStageParse'
+        : 'pdfStageParseValues';
     case 'validate':
-      return text('pdfStageValidate');
+      return 'pdfStageValidate';
     case 'encode':
-      return text('pdfStageEncode');
+      return 'pdfStageEncode';
     default:
-      return text('pdfUnexpected');
+      return 'pdfUnexpected';
   }
 }
 
@@ -504,11 +578,17 @@ function writeEdit(prescription: ReviewPrescription, edit: ReviewEdit): boolean 
  * table renders — and therefore the only shortcut that can resolve — is
  * `Patient`. The label is passed through `recapFixField`; the pointer is the
  * same target the guided task link focuses, so both affordances land on one
- * control.
+ * control. The section noun is a key (`recapFixSectionPatient`) because it is
+ * read, not because it is structural: the three templates inflect it
+ * differently, so each locale supplies the form its sentence needs.
  */
 const RECAP_FIX_SECTIONS = [
-  { section: 'Patient', label: 'patient', pointer: '/Patient/FName' },
-] as const;
+  { section: 'Patient', labelKey: 'recapFixSectionPatient', pointer: '/Patient/FName' },
+] as const satisfies readonly {
+  readonly section: string;
+  readonly labelKey: UiStringKey;
+  readonly pointer: string;
+}[];
 
 /** True when any finding concerns the section or names it as missing. */
 function sectionImplicated(findings: readonly ReviewFinding[], section: string): boolean {
@@ -535,10 +615,15 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
   // Presentation of the flow as 1 Upload → 2 Review → 3 Export. This is a
   // caption over unchanged sections, not a second navigation model: the active
   // item is the only thing that changes, and the step name is always text.
-  const stepLabels = [text('pdfStep1Label'), text('pdfStep2Label'), text('pdfStep3Label')];
+  // Both texts are re-resolved by `refreshLabels`, so the nodes are kept.
+  const STEP_LABEL_KEYS = ['pdfStep1Label', 'pdfStep2Label', 'pdfStep3Label'] as const;
   const stepList = el('ol', 'flow-steps');
   stepList.setAttribute('aria-label', text('pdfStepIndicatorLabel'));
-  const stepItems = stepLabels.map((label, index) => {
+  /** Step name nodes, in step order (`refreshLabels` rewrites them in place). */
+  const stepNames: HTMLElement[] = [];
+  /** "Step N of 3" nodes, in step order. */
+  const stepPositions: HTMLElement[] = [];
+  const stepItems = STEP_LABEL_KEYS.map((key, index) => {
     const item = el('li', 'flow-step');
     // The disc repeats the position the "Step N of 3" text already states.
     const number = el('span', 'flow-step-number');
@@ -548,7 +633,9 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
     const position = el('span', 'flow-step-of');
     position.textContent = format(text('pdfStepOf'), { current: index + 1 });
     const name = el('span', 'flow-step-label');
-    name.textContent = label;
+    name.textContent = text(key);
+    stepNames.push(name);
+    stepPositions.push(position);
     body.append(position, name);
     item.append(number, body);
     return item;
@@ -836,7 +923,13 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
     }
   }
 
-  /** Signature of the DOM a value would produce; equal ⇒ nothing to write. */
+  /**
+   * Signature of the DOM a value would produce; equal ⇒ nothing to write.
+   *
+   * The absent branch renders `reviewValuePlaceholder`, so that text is part of
+   * the signature: without it, a locale whose placeholder differs would keep the
+   * stale placeholder after a locale switch (the row would look unchanged).
+   */
   function recapContentSignature(
     parts: readonly RecapPart[],
     absent: boolean,
@@ -847,7 +940,8 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
         'badge' in part ? `b:${part.badge}` : `${part.mono === true ? 'm' : 't'}:${part.text}`,
       )
       .join('\u0000');
-    return `${absent ? 'a' : 'p'}|${tone}|${body}`;
+    const content = absent ? `a:${text('reviewValuePlaceholder')}` : `p:${body}`;
+    return `${content}|${tone}`;
   }
 
   /**
@@ -932,10 +1026,10 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
    * `renderRecapActions`); the node itself is never recreated, so a focused
    * shortcut survives a refresh that keeps it visible.
    */
-  const recapFixButtons = RECAP_FIX_SECTIONS.map(({ label, pointer }) => {
+  const recapFixButtons = RECAP_FIX_SECTIONS.map(({ labelKey, pointer }) => {
     const button = el('button', 'secondary recap-fix');
     button.type = 'button';
-    button.textContent = format(text('recapFixField'), { section: label });
+    button.textContent = format(text('recapFixField'), { section: text(labelKey) });
     button.hidden = true;
     button.addEventListener('click', () => {
       // Same target as the guided task link: one control, two affordances.
@@ -1065,6 +1159,36 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
   let hasJsonResult = false;
   /** True once the user pressed a view toggle; their choice then always wins. */
   let userSelectedJsonView = false;
+  /**
+   * How to repaint the status line in the current locale.
+   *
+   * The line reports a stage failure (`stageMessage`), a count (`pdfSuccess`), a
+   * draft state or a read failure, so a bare key cannot describe it. The panel
+   * keeps the *derivation* instead and re-runs it on a locale change; every
+   * captured input is immutable per run, so a repaint can only change words.
+   * `null` means the line is empty.
+   */
+  let statusSource: (() => string) | null = null;
+  /** Tone of the current status line, re-applied with the text. */
+  let statusVariant: '' | 'is-error' | 'is-warning' = '';
+  /**
+   * Key of the neutral message the findings view shows, or `null` while it shows
+   * findings. Kept so a locale change re-issues the same message.
+   */
+  let findingsMessageKey: UiStringKey | null = null;
+  /**
+   * Key of the preview line, or `null` when it is empty. The preview failure is
+   * the one outcome message of this panel that describes a state (not an event),
+   * so it is re-issued rather than left stale.
+   */
+  let previewStatusKey: UiStringKey | null = null;
+  /** True while the JSON area holds an unencoded draft (drives the heading). */
+  let draftMode = false;
+  /** Counts of the last recap pass, so a locale change re-derives the verdict. */
+  let recapCounts: { readonly errors: number; readonly warnings: number } = {
+    errors: 0,
+    warnings: 0,
+  };
 
   /** Switches visibility only — content is never recomputed here. */
   function applyJsonView(view: JsonOutputView): void {
@@ -1098,15 +1222,54 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
     }
   }
 
-  function setStatus(message: string, variant: '' | 'is-error' | 'is-warning'): void {
+  /**
+   * Paints the status line from the derivation it was last set with.
+   *
+   * Called on every state change and again on a locale change: the tone is
+   * re-applied with the text, so a repaint never loses the error/warning tint.
+   */
+  function paintStatus(): void {
     scanStatus.classList.remove('is-error', 'is-warning');
-    if (variant !== '') {
-      scanStatus.classList.add(variant);
+    if (statusVariant !== '') {
+      scanStatus.classList.add(statusVariant);
     }
-    scanStatus.textContent = message;
+    scanStatus.textContent = statusSource === null ? '' : statusSource();
+  }
+
+  /**
+   * Sets the status line to a lazily-resolved message.
+   *
+   * `source` returns the current locale's wording and is kept, not invoked once,
+   * so the line can be repainted (`paintStatus`) without tracking a second copy
+   * of every branch. `null` clears it.
+   */
+  function setStatus(
+    source: (() => string) | null,
+    variant: '' | 'is-error' | 'is-warning',
+  ): void {
+    statusSource = source;
+    statusVariant = variant;
+    paintStatus();
+  }
+
+  /** Shows findings; a live message is stale by definition. */
+  function renderFindings(
+    errors: readonly Finding[],
+    warnings: readonly Finding[],
+    info?: readonly Finding[],
+  ): void {
+    findingsMessageKey = null;
+    findings.render(errors, warnings, info);
+  }
+
+  /** Shows one neutral message and remembers its key for the locale refresh. */
+  function showFindingsMessage(key: UiStringKey): void {
+    findingsMessageKey = key;
+    findings.message(text(key));
   }
 
   function previewFailed(): void {
+    previewStatusKey = 'pdfPreviewFailed';
     previewStatus.textContent = text('pdfPreviewFailed');
   }
 
@@ -1122,6 +1285,7 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
     previewFrame.hidden = true;
     previewCanvas.width = 0;
     previewCanvas.height = 0;
+    previewStatusKey = null;
     previewStatus.textContent = '';
   }
 
@@ -1305,6 +1469,9 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
    * its rows are dropped then, so no stale value can survive.
    */
   function renderRecap(errorCount: number, warningCount: number): void {
+    // Kept so a locale change can re-run this very derivation (the verdict is
+    // `format()`ed, so it cannot be repainted from a key alone).
+    recapCounts = { errors: errorCount, warnings: warningCount };
     const prescription = editedPrescription;
     if (prescription === null) {
       recapList.replaceChildren();
@@ -1446,8 +1613,8 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
     fileInput.value = '';
     clearOutput();
     syncControls();
-    findings.message(text('pdfIdle'));
-    setStatus('', '');
+    showFindingsMessage('pdfIdle');
+    setStatus(null, '');
   }
 
   /**
@@ -1456,6 +1623,7 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
    * draft can never reach the CHMED textarea, the clipboard or the QR code.
    */
   function setDraftMode(active: boolean): void {
+    draftMode = active;
     jsonHeading.textContent = active ? text('pdfDraftHeading') : text('pdfJsonOutputHeading');
     draftHint.hidden = !active;
   }
@@ -1475,7 +1643,7 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
         jsonOutput.value = result.draft.json;
         jsonCopyButton.disabled = false;
         jsonDownloadButton.disabled = false;
-        setStatus(text('pdfDraftStatus'), 'is-warning');
+        setStatus(() => text('pdfDraftStatus'), 'is-warning');
         // The object the inline editing writes into, set before the table sees it.
         editedPrescription = result.draft.prescription;
         // Structured mirror of the very text written above; marks come from the
@@ -1492,12 +1660,12 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
         // resolves the input element while the findings are rendered, so the
         // table it points at must already be mounted.
         reviewTable.render(result.draft.prescription, currentReviewFindings);
-        findings.render(failureFindings(result), []);
+        renderFindings(failureFindings(result), []);
         renderRecap(result.errors.length, 0);
         return;
       }
-      findings.render(failureFindings(result), []);
-      setStatus(stageMessage(result), 'is-error');
+      renderFindings(failureFindings(result), []);
+      setStatus(() => text(stageMessage(result)), 'is-error');
       return;
     }
 
@@ -1511,13 +1679,13 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
     pageCount = result.pageCount;
     sourceConfidence = result.confidence;
     baselineJson = result.json;
-    findings.render([], warnings, info);
+    renderFindings([], warnings, info);
     // A successful encode carries warnings only, so every field they do not
     // implicate is "Recognized".
     currentReviewFindings = warningReviewFindings(result.warnings);
     reviewTable.render(result.prescription, currentReviewFindings);
     setStatus(
-      format(text('pdfSuccess'), { pages: result.pageCount }),
+      () => format(text('pdfSuccess'), { pages: result.pageCount }),
       warnings.length > 0 ? 'is-warning' : '',
     );
 
@@ -1620,7 +1788,7 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
     renderJsonView(editedPrescription, outcome.errors);
 
     const valid = outcome.errors.length === 0 && outcome.chmed !== null;
-    findings.render(
+    renderFindings(
       errorFindings(outcome.errors),
       warningFindings(outcome.warnings),
       valid ? successInfo : [],
@@ -1648,9 +1816,9 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
     jsonStatus.textContent = '';
 
     if (valid) {
-      setStatus(editSuccessStatus(), outcome.warnings.length > 0 ? 'is-warning' : '');
+      setStatus(() => editSuccessStatus(), outcome.warnings.length > 0 ? 'is-warning' : '');
     } else {
-      setStatus(text('pdfStageValidate'), 'is-error');
+      setStatus(() => text('pdfStageValidate'), 'is-error');
     }
     // Updated only on the committed `change` re-validation, never mid-keystroke,
     // so the summary cannot flap while a value is being typed. The counts are
@@ -1670,8 +1838,8 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
 
     syncControls();
     clearOutput();
-    setStatus(text('pdfProcessing'), '');
-    findings.message(text('pdfProcessing'));
+    setStatus(() => text('pdfProcessing'), '');
+    showFindingsMessage('pdfProcessing');
 
     try {
       const result = await pdfToPrescription(bytes);
@@ -1683,8 +1851,8 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
       if (myGeneration !== generation) {
         return;
       }
-      findings.render([{ path: '', message: text('pdfUnexpected') }], []);
-      setStatus(text('pdfUnexpected'), 'is-error');
+      renderFindings([{ path: '', message: text('pdfUnexpected') }], []);
+      setStatus(() => text('pdfUnexpected'), 'is-error');
       clearOutput();
     } finally {
       if (myGeneration === generation) {
@@ -1711,8 +1879,8 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
       currentBytes = null;
       clearOutput();
       syncControls();
-      findings.render([{ path: '', message: text('pdfFileTooLarge') }], []);
-      setStatus(text('pdfFileTooLarge'), 'is-error');
+      renderFindings([{ path: '', message: text('pdfFileTooLarge') }], []);
+      setStatus(() => text('pdfFileTooLarge'), 'is-error');
       return;
     }
     let bytes: Uint8Array;
@@ -1723,8 +1891,8 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
       processed = false;
       fileInput.value = '';
       syncControls();
-      findings.render([{ path: '', message: text('pdfReadFailed') }], []);
-      setStatus(text('pdfReadFailed'), 'is-error');
+      renderFindings([{ path: '', message: text('pdfReadFailed') }], []);
+      setStatus(() => text('pdfReadFailed'), 'is-error');
       return;
     }
     // The File object is not needed anymore; its bytes live only in this panel.
@@ -1751,7 +1919,7 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
 
   processButton.addEventListener('click', () => {
     if (currentBytes === null) {
-      findings.message(text('pdfIdle'));
+      showFindingsMessage('pdfIdle');
       return;
     }
     void run(currentBytes);
@@ -1793,9 +1961,111 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
   // Pre-result state: the raw textarea (today's behaviour). The first draft or
   // success switches to Structured unless the user has already toggled.
   applyJsonView('raw');
-  findings.message(text('pdfIdle'));
+  showFindingsMessage('pdfIdle');
   renderQr();
   syncSteps();
+
+  /**
+   * Re-applies every label this panel owns from the current locale.
+   *
+   * LABEL-ONLY BY CONTRACT (i18n plan 007, phases 2 and 5). Everything the user
+   * put into — or got out of — this tab survives: the retained PDF bytes, the
+   * rasterized first page, the JSON textarea (pipeline output or the edited
+   * document), every review-table input value including text typed but not yet
+   * committed, the CHMED16A string, the QR symbol, the draft banner and the
+   * findings/advisory state. This function calls no pipeline, no
+   * `resetPanel`, no `clearOutput` and no re-validation; it writes text and
+   * accessible names only.
+   *
+   * Piece by piece:
+   * - static labels (step, upload, preview, JSON/recap/CHMED/QR sections and
+   *   their buttons) are rewritten through the Phase 3 primitives
+   *   (`setFieldLabels`, `setButtonLabel`, `setLeadingIconLabel`);
+   * - the review table relabels itself in place (`reviewTable.relabel`), so each
+   *   input keeps focus, caret and value;
+   * - the findings view relabels through its own authoring path, and a neutral
+   *   message is re-issued from the key it was shown for;
+   * - the structured JSON viewer relabels in place (`jsonViewer.relabel`), so its
+   *   section hints and missing-required badge follow the locale while every
+   *   expanded section stays open;
+   * - four pieces are re-derived rather than re-worded, because their text is
+   *   `format()`ed: the status line (from `statusSource`), the preview failure
+   *   (from `previewStatusKey`), the draft heading (from `draftMode`) and the
+   *   export recap (from `recapCounts`, which rewrites only rows whose text
+   *   changed — the recap's `<dl>` is not rebuilt because its row set is the
+   *   same);
+   * - `renderQr()` re-renders the same string into the same preview, so the QR
+   *   code and its caption follow the locale without touching `lastChmed`.
+   *
+   * Copy confirmations written by `copyText` describe an event, not a label, and
+   * are left alone (they are shared clipboard wording, i18n plan 007 phase 6).
+   */
+  function refreshLabels(): void {
+    heading.textContent = text('tabPdfToChmed');
+    stepList.setAttribute('aria-label', text('pdfStepIndicatorLabel'));
+    stepPositions.forEach((node, index) => {
+      node.textContent = format(text('pdfStepOf'), { current: index + 1 });
+    });
+    stepNames.forEach((node, index) => {
+      const key = STEP_LABEL_KEYS[index];
+      if (key !== undefined) {
+        node.textContent = text(key);
+      }
+    });
+
+    setLeadingIconLabel(fileLabel, text('pdfFileLabel'));
+    fileHint.textContent = text('pdfFileHint');
+    setButtonLabel(processButton, text('pdfProcess'));
+    paintStatus();
+
+    previewHeading.textContent = text('pdfPreviewHeading');
+    previewCanvas.setAttribute('aria-label', text('pdfPreviewAriaLabel'));
+    if (previewStatusKey !== null) {
+      previewStatus.textContent = text(previewStatusKey);
+    }
+
+    findings.relabel(text('pdfFindingsHeading'));
+    if (findingsMessageKey !== null) {
+      findings.message(text(findingsMessageKey));
+    }
+    reviewTable.relabel();
+
+    setDraftMode(draftMode);
+    jsonViewToggle.setAttribute('aria-label', text('jsonViewGroupLabel'));
+    structuredJsonButton.textContent = text('jsonViewStructured');
+    rawJsonButton.textContent = text('jsonViewRaw');
+    jsonViewer.relabel();
+    setFieldLabels(jsonOutput, {
+      label: text('pdfJsonOutputLabel'),
+      hint: text('jsonOutputHint'),
+    });
+    setButtonLabel(jsonClearButton, text('clear'), text('clearJsonOutputAccessibleName'));
+    setButtonLabel(jsonCopyButton, text('copy'), text('copyJsonAccessibleName'));
+    setButtonLabel(jsonDownloadButton, text('download'), text('downloadJsonAccessibleName'));
+
+    recapHeading.textContent = text('exportRecapHeading');
+    recapFixButtons.forEach((button, index) => {
+      const spec = RECAP_FIX_SECTIONS[index];
+      if (spec !== undefined) {
+        button.textContent = format(text('recapFixField'), { section: text(spec.labelKey) });
+      }
+    });
+    renderRecap(recapCounts.errors, recapCounts.warnings);
+
+    chmedHeading.textContent = text('chmedOutputHeading');
+    setFieldLabels(chmedOutput, {
+      label: text('chmedOutputLabel'),
+      hint: text('chmedOutputHint'),
+    });
+    setButtonLabel(chmedClearButton, text('clear'), text('clearChmedOutputAccessibleName'));
+    setButtonLabel(chmedCopyButton, text('copy'), text('copyChmedAccessibleName'));
+    setButtonLabel(chmedDownloadButton, text('download'), text('downloadChmedAccessibleName'));
+
+    qrHeading.textContent = text('qrHeading');
+    ecLabel.textContent = text('qrEcLabel');
+    ecHint.textContent = text('qrEcHint');
+    renderQr();
+  }
 
   return {
     dispose: () => {
@@ -1809,5 +2079,6 @@ export function mountPdfToChmed(container: HTMLElement): Panel {
       // the idle view with no bytes, no output and no stale findings/status.
       resetPanel();
     },
+    refresh: refreshLabels,
   };
 }

@@ -337,7 +337,11 @@ function mergeWarnings(
 function unexpectedFailure(stage: PdfToPrescriptionStage): PdfToPrescriptionFailure {
   switch (stage) {
     case 'extract':
-      return { ok: false, stage, errors: [{ code: 'pdf-corrupt', message: UNEXPECTED_MESSAGE }] };
+      return {
+        ok: false,
+        stage,
+        errors: [{ code: 'pdf-corrupt', message: UNEXPECTED_MESSAGE, detail: 'unexpected' }],
+      };
     case 'ocr':
       return { ok: false, stage, errors: [{ code: 'ocr-failed', message: UNEXPECTED_MESSAGE }] };
     case 'parse':

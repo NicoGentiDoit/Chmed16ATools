@@ -5,6 +5,25 @@
  * branches on the header. Uploaded images and the optional camera feed both go
  * through `scanImageData`; the camera is started only from a user gesture and
  * stopped on success, on tab switch and on page hide (see `dispose`).
+ *
+ * ## In-place locale refresh (i18n plan 007, phase 4)
+ *
+ * `refresh()` repaints the labels of this panel for the current locale. It is
+ * label-only by contract: the typed CHMED16A string, the decoded JSON in both
+ * presentations, the findings and a RUNNING camera scan all survive a locale
+ * switch. Nothing here disposes the camera, restarts the scan loop or clears the
+ * scanned input — a locale change is presentation, never state.
+ *
+ * ## Decode findings (i18n plan 007, phase 7)
+ *
+ * The decoder returns a stable `code` (and, where one code covers several
+ * messages, a `detail`) plus the values a sentence needs as `params`; the
+ * wording is resolved here by `ui/i18n/core-message.ts` at paint time. The
+ * core's English `message` is only the fallback for a code without a key (the
+ * validator's JSON syntax text, which is the schema engine's own), so a finding
+ * is never blank. Like any finding, the wording of one already on screen is a
+ * result snapshot and is not re-translated by `refresh()`; the next decode
+ * renders in the new locale.
  */
 
 import { chmedToJson } from '../core/decode';
@@ -17,18 +36,26 @@ import {
   validateObject,
 } from '../core/validate';
 import type { ValidationError, ValidationWarning } from '../core/validate';
-import { createButtonWithIcon, svg } from './components/buttons';
+import { createButtonWithIcon, setButtonLabel, svg } from './components/buttons';
 import { copyText, downloadText } from './components/clipboard';
 import { el } from './components/dom';
-import { createTextareaField } from './components/fields';
+import { createTextareaField, setFieldLabels } from './components/fields';
 import { createFindingsView } from './components/findings';
 import type { Finding } from './components/findings';
 import { createJsonViewer } from './components/json-viewer';
+import { coreMessageText } from './i18n/core-message';
 import { text } from './strings';
+import type { UiStringKey } from './strings';
 
 export interface Panel {
   /** Releases resources held by the panel. */
   dispose(): void;
+  /**
+   * Re-applies every label of the panel for the current locale without
+   * rebuilding it: the typed document, the decoded JSON, the findings and a
+   * running camera scan are all kept as they are.
+   */
+  refresh?(): void;
 }
 
 const INPUT_ID = 'chmed-to-json-input';
@@ -52,6 +79,23 @@ function createViewToggleButton(parent: HTMLElement, label: string): HTMLButtonE
   return button;
 }
 
+/**
+ * Replaces the text of a label that leads with an icon, keeping the icon.
+ *
+ * The file label is built from `svg()` markup plus one text node, so assigning
+ * `textContent` would drop the icon. Only the trailing text node is rewritten,
+ * exactly like `setButtonLabel` does for buttons; a label without a text node
+ * gets one appended.
+ */
+function setLeadingIconLabel(label: HTMLElement, value: string): void {
+  const last = label.lastChild;
+  if (last instanceof Text) {
+    last.textContent = value;
+    return;
+  }
+  label.append(document.createTextNode(value));
+}
+
 function errorFindings(errors: readonly ValidationError[]): Finding[] {
   return errors.map((error) => ({ path: error.instancePath, message: error.message }));
 }
@@ -61,7 +105,9 @@ function warningFindings(warnings: readonly ValidationWarning[]): Finding[] {
 }
 
 function decodeFindings(errors: readonly DecodeError[]): Finding[] {
-  return errors.map((error) => ({ path: error.code, message: error.message }));
+  // The code (and its detail) is what the finding is localized from; the core's
+  // English `message` is only the fallback for a code without a key.
+  return errors.map((error) => ({ path: error.code, message: coreMessageText(error) }));
 }
 
 /** Turns an unexpected throw (e.g. a stack overflow) into a blocking finding. */
@@ -217,6 +263,21 @@ export function mountChmedToJson(container: HTMLElement): Panel {
   let scanning = false;
   let scanTimer: number | null = null;
 
+  /**
+   * What the scan status line currently says, kept as the key it was painted
+   * from (plus its tone) so a locale change can re-issue the very same message.
+   * Every write goes through {@link paintScanStatus}; a `null` key means idle.
+   */
+  let scanStatusKey: UiStringKey | null = null;
+  let scanStatusVariant: 'is-error' | 'is-warning' | null = null;
+
+  /**
+   * Key of the neutral message the findings view currently shows, or `null`
+   * when it shows findings. Kept so a locale change can re-issue the same
+   * message instead of leaving stale wording on screen.
+   */
+  let findingsMessageKey: UiStringKey | null = null;
+
   // The raw textarea is the initial view; the first successful decode switches
   // to Structured unless the user already picked a view. Neither flag is
   // persisted: the choice lives for this session only (no localStorage).
@@ -232,12 +293,33 @@ export function mountChmedToJson(container: HTMLElement): Panel {
     structuredView.hidden = !structured;
   }
 
-  function setScanStatus(message: string, variant: '' | 'is-error' | 'is-warning'): void {
+  /**
+   * Paints the scan status line from a key and remembers both.
+   *
+   * The message is resolved with `text()` at write time, so it always reflects
+   * the locale current at that moment; there is no per-frame status text, so
+   * nothing re-reads the locale inside the scan loop.
+   */
+  function paintScanStatus(key: UiStringKey | null, variant: 'is-error' | 'is-warning' | null): void {
+    scanStatusKey = key;
+    scanStatusVariant = variant;
     scanStatus.classList.remove('is-error', 'is-warning');
-    if (variant !== '') {
+    if (variant !== null) {
       scanStatus.classList.add(variant);
     }
-    scanStatus.textContent = message;
+    scanStatus.textContent = key === null ? '' : text(key);
+  }
+
+  /** Shows findings; a live message is stale by definition. */
+  function renderFindings(errors: readonly Finding[], warnings: readonly Finding[]): void {
+    findingsMessageKey = null;
+    findings.render(errors, warnings);
+  }
+
+  /** Shows one neutral message and remembers its key for the locale refresh. */
+  function showFindingsMessage(key: UiStringKey): void {
+    findingsMessageKey = key;
+    findings.message(text(key));
   }
 
   function clearOutput(): void {
@@ -310,14 +392,14 @@ export function mountChmedToJson(container: HTMLElement): Panel {
   }
 
   async function startCameraUi(): Promise<void> {
-    setScanStatus('', '');
+    paintScanStatus(null, null);
     // Reveal the element first: some browsers refuse to play a display:none video.
     video.hidden = false;
     try {
       await startCamera(video);
     } catch {
       stopCameraUi();
-      setScanStatus(text('cameraUnavailable'), 'is-error');
+      paintScanStatus('cameraUnavailable', 'is-error');
       return;
     }
     cameraActive = true;
@@ -328,19 +410,16 @@ export function mountChmedToJson(container: HTMLElement): Panel {
 
   function handleScannedText(value: string): void {
     chmedInput.value = value;
-    setScanStatus(text('scanSuccess'), '');
+    paintScanStatus('scanSuccess', null);
     decodeCurrentInput();
   }
 
   async function handleFile(file: File): Promise<void> {
-    setScanStatus('', '');
+    paintScanStatus(null, null);
     const result = await readFileAsImageData(file);
     fileInput.value = '';
     if (!result.ok) {
-      setScanStatus(
-        result.code === 'no-qr' ? text('scanNoQr') : text('scanImageFailed'),
-        'is-warning',
-      );
+      paintScanStatus(result.code === 'no-qr' ? 'scanNoQr' : 'scanImageFailed', 'is-warning');
       return;
     }
     handleScannedText(result.text);
@@ -349,7 +428,7 @@ export function mountChmedToJson(container: HTMLElement): Panel {
   function decodeCurrentInput(): void {
     const value = chmedInput.value.trim();
     if (value === '') {
-      findings.message(text('emptyInput'));
+      showFindingsMessage('emptyInput');
       clearOutput();
       return;
     }
@@ -359,7 +438,7 @@ export function mountChmedToJson(container: HTMLElement): Panel {
     try {
       decodeDocument(value);
     } catch (error) {
-      findings.render([unexpectedFinding(error)], []);
+      renderFindings([unexpectedFinding(error)], []);
       clearOutput();
     }
   }
@@ -367,14 +446,14 @@ export function mountChmedToJson(container: HTMLElement): Panel {
   function decodeDocument(value: string): void {
     const decoded = chmedToJson(value);
     if (!decoded.ok) {
-      findings.render(decodeFindings(decoded.errors), []);
+      renderFindings(decodeFindings(decoded.errors), []);
       clearOutput();
       return;
     }
 
     const parsed = parseJsonText(decoded.jsonText);
     if (!parsed.ok) {
-      findings.render([{ path: '', message: parsed.error.message }], []);
+      renderFindings([{ path: '', message: parsed.error.message }], []);
       clearOutput();
       return;
     }
@@ -398,7 +477,7 @@ export function mountChmedToJson(container: HTMLElement): Panel {
     }
 
     const validation = validateObject(parsed.value);
-    findings.render(errorFindings(validation.errors), warningFindings(validation.warnings));
+    renderFindings(errorFindings(validation.errors), warningFindings(validation.warnings));
   }
 
   decodeButton.addEventListener('click', decodeCurrentInput);
@@ -427,7 +506,7 @@ export function mountChmedToJson(container: HTMLElement): Panel {
   cameraButton.addEventListener('click', () => {
     if (cameraActive) {
       stopCameraUi();
-      setScanStatus('', '');
+      paintScanStatus(null, null);
       return;
     }
     void startCameraUi();
@@ -446,19 +525,72 @@ export function mountChmedToJson(container: HTMLElement): Panel {
     // field moments after it was emptied.
     stopCameraUi();
     chmedInput.value = '';
-    setScanStatus('', '');
-    findings.message(text('notValidated'));
+    paintScanStatus(null, null);
+    showFindingsMessage('notValidated');
     clearOutput();
   });
 
   // Same path the panel already uses for an empty or undecodable document.
   clearOutputButton.addEventListener('click', clearOutput);
 
-  findings.message(text('notValidated'));
+  showFindingsMessage('notValidated');
+
+  /**
+   * Re-applies every label this panel owns from the current locale.
+   *
+   * Label-only by contract. Kept as-is across the repaint: the typed CHMED16A
+   * string, the decoded JSON in both presentations, the selected view, the
+   * findings, the copy/download enabled state and an ACTIVE camera session —
+   * nothing here calls `dispose`, `stopCameraUi`, `startCameraUi` or a decode,
+   * so a running scan loop and its scheduled frame keep untouched.
+   *
+   * Shared-component labels are re-created through their own handles
+   * (`relabel`, `setFieldLabels`, `setButtonLabel`). Two pieces of text are
+   * re-derived from tracked state instead of being left stale: the scan status
+   * line (from `scanStatusKey`) and the findings message (from
+   * `findingsMessageKey`). The camera button label follows `cameraActive`, so a
+   * running session still reads "stop" in the new locale; it is written through
+   * `setButtonLabel`, which edits the trailing text node only.
+   *
+   * Transient outcome messages written with `textContent` (a copy confirmation)
+   * are left alone: they describe an event, not a label. The structured viewer's
+   * own labels (section hints, missing-required badge, region name) are re-applied
+   * by `jsonViewer.relabel()`, in place, so an expanded section stays open.
+   */
+  function refreshLabels(): void {
+    heading.textContent = text('tabChmedToJson');
+    setFieldLabels(chmedInput, { label: text('chmedInputLabel'), hint: text('chmedInputHint') });
+    setButtonLabel(clearInputButton, text('clear'), text('clearInputAccessibleName'));
+    setButtonLabel(decodeButton, text('decodeToJson'));
+
+    scanHeading.textContent = text('scanHeading');
+    setLeadingIconLabel(fileLabel, text('scanFileLabel'));
+    fileHint.textContent = text('scanFileHint');
+    setButtonLabel(cameraButton, text(cameraActive ? 'cameraStop' : 'cameraStart'));
+    cameraHint.textContent = text('cameraPermissionHint');
+    video.setAttribute('aria-label', text('cameraPreview'));
+    paintScanStatus(scanStatusKey, scanStatusVariant);
+
+    findings.relabel(text('resultsHeading'));
+    if (findingsMessageKey !== null) {
+      findings.message(text(findingsMessageKey));
+    }
+
+    outputHeading.textContent = text('jsonOutputHeading');
+    setFieldLabels(jsonOutput, { label: text('jsonOutputLabel'), hint: text('jsonOutputHint') });
+    viewToggle.setAttribute('aria-label', text('jsonViewGroupLabel'));
+    structuredViewButton.textContent = text('jsonViewStructured');
+    rawViewButton.textContent = text('jsonViewRaw');
+    jsonViewer.relabel();
+    setButtonLabel(clearOutputButton, text('clear'), text('clearOutputAccessibleName'));
+    setButtonLabel(copyButton, text('copy'), text('copyJsonAccessibleName'));
+    setButtonLabel(downloadButton, text('download'), text('downloadJsonAccessibleName'));
+  }
 
   return {
     dispose: () => {
       stopCameraUi();
     },
+    refresh: refreshLabels,
   };
 }
