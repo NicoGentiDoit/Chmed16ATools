@@ -2,6 +2,8 @@ plan/
 .context/
 .hermes/
 .opencode/
-
+app/PLAN.md
+docs/TECH_DECISIONS.md
+design-system/
 TECH_STACK.md
 .code-review-graph/
