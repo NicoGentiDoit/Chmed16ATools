@@ -281,8 +281,7 @@ anchors next to each rule. **No proprietary DLL or vendor code was copied or dec
 encoder, decoder, validator, PDF importer and QR handling are an independent TypeScript
 implementation written from the published specification, using the bundled open-source libraries
 `pako`, `ajv`, `jsqr`, `qrcode-generator`, `pdfjs-dist` (Apache-2.0) and `tesseract.js`
-(Apache-2.0, with MIT English/German traineddata). The dependency and derogation record lives in
-"The dependency record is maintained locally (git-ignored TECH_STACK/TECH_DECISIONS) and is intentionally not committed."
+The dependency and derogation record is maintained locally (git-ignored TECH_STACK/TECH_DECISIONS) and is intentionally not committed.
 
 ## Disclaimer
 
