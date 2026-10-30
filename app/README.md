@@ -13,8 +13,8 @@ The tool works on the `CHMED16A{Compression}{Data}` transmission format defined 
 `ig-emediplan/specification`. It understands both the compressed (`CHMED16A1…`, standard
 Base64 of gzipped JSON) and uncompressed (`CHMED16A0…`, plain JSON) variants, validates the
 decoded document against a hand-written, spec-tolerant JSON Schema, and round-trips it back to
-a CHMED string and a QR code. A printed eMediplan prescription PDF can also be imported and
-turned into the same JSON, string and QR.
+a CHMED string and a QR code. A printed eMediplan Medication Plan PDF can also be imported and
+turned into a `MedType` 1 plan with the same JSON, string and QR.
 
 Three tabs cover the whole workflow:
 
@@ -22,9 +22,10 @@ Three tabs cover the whole workflow:
    QR code.
 2. **CHMED16A → JSON** — type or paste a string, upload a QR image, or (optionally) scan with
    the camera, then read, copy or download the pretty-printed JSON.
-3. **PDF → CHMED16A** — upload a printed eMediplan prescription PDF, extract its medication
-   block, and get the validated ePrescription JSON, the `CHMED16A1…` string and a QR preview.
-   If validation blocks, the parsed JSON is shown as a draft and no string/QR is produced.
+3. **PDF → CHMED16A** — upload a printed Medication Plan PDF, extract the patient block and
+   medication table, and get the validated Medication Plan JSON (`MedType` 1), the
+   `CHMED16A1…` string and a QR preview. If validation blocks, the parsed JSON is shown as a
+   draft and no string/QR is produced.
 
 ## Features
 
@@ -41,27 +42,31 @@ Three tabs cover the whole workflow:
 - **Scan QR** — decode an uploaded PNG/JPEG (or any image the browser can read), or scan live
   with `getUserMedia`; a successful scan fills the input and decodes immediately. The camera
   only starts on an explicit button press and stops on tab switch or page hide.
-- **Import PDF** — upload a printed eMediplan paper-layout prescription, parse its patient,
-  provider and medication columns, then validate, encode and preview the result. The
-  prescription is always `MedType` 3 (Rx) at revision 3, with `HcPerson`/`HcOrg` filled from the
-  provider block when the PDF states them. Real eMediplan paper layouts are supported: rows and
-  columns are reconstructed from the PDF text-item geometry (per-table column bands), so layouts
-  with oscillating column gaps and the German title vocabulary (`Medikament`, `Morgen`...`Nacht`,
-  `Einheit`, `Von`, `Bis u. mit`, `Anleitung`, `Grund`, `Verordnet durch`, plus the 2023 layout's
-  `Anwendungsinstruktion`, `Anwendungsgrund`) are read too.
-- **Prescriber inference** — when the document-level author block is empty but every medication
-  row prints the same prescriber, that one printed doctor supplies the `HcPerson` name (honorifics
-  and the printed city are dropped). The GLN still has to be printed on the document: revision 3
-  makes `HcPerson.Gln` required, so nothing is ever synthesized. Rows naming two different doctors
-  mean no inference at all — the validation findings then report the missing identity.
-- **Draft mode** — when the extracted prescription does not validate (for example an official
-  sample with no prescriber and no practice data), the parsed JSON is still shown, clearly marked
-  as a draft, together with the blocking findings. The CHMED textarea, its copy/download buttons
-  and the QR code stay empty and disabled: encoding is strictly gated on validation success.
+- **Import PDF** — upload a printed eMediplan Medication Plan (`Der Schweizer Medikationsplan`),
+  parse its patient block and medication table, then validate, encode and preview the result.
+  The output is always a Medication Plan (`MedType` 1), never an Rx. Text-layer PDFs are read
+  directly and the medication table is reconstructed from the text-item geometry (per-table
+  column bands), so layouts with oscillating column gaps and the German title vocabulary
+  (`Medikament`, `Morgen`...`Nacht`, `Einheit`, `Von`, `Bis u. mit`, `Anleitung`, `Grund`,
+  `Verordnet durch`, plus the 2023 layout's `Anwendungsinstruktion`, `Anwendungsgrund`) are read
+  too. Printed patient measurements and risk categories fill `Patient.Med` where the spec table
+  gives an unambiguous mapping; unmappable printed text is reported as a warning, never guessed.
+- **Swissmedic ids from link annotations** — when the text-layer PDF carries link annotations
+  over the medication rows, the referenced Swissmedic product number is attached to that row as
+  `IdType` 4. Without a matching annotation — a text-only print, or an OCR result with no vector
+  geometry — the id stays the printed text with `IdType` 1.
+- **Per-row prescriber** — each medication row keeps the printed `Verordnet durch` value as
+  `PrscbBy`. The document `Auth` is the printed provider GLN when the document states one and
+  the literal `patient` otherwise; nothing is synthesized from a row into a document identity.
+- **Draft mode** — when the extracted prescription does not validate (for example a printed
+  patient field that could not be read), the parsed JSON is still shown, clearly marked as a
+  draft, together with the blocking findings. The CHMED textarea, its copy/download buttons and
+  the QR code stay empty and disabled: encoding is strictly gated on validation success.
 - **OCR fallback** — PDFs with a text layer are parsed directly, without OCR. Scanned or
   image-only PDFs are recognized in the browser by a bundled tesseract.js worker (English +
   German traineddata), page by page; OCR-derived text is reported with a low-confidence warning
-  so it is never mistaken for a clean text extraction.
+  so it is never mistaken for a clean text extraction. OCR has no vector geometry, so its
+  product ids stay text-based (`IdType` 1).
 
 All three tabs are keyboard-operable, use labelled controls with live regions for results, and keep
 all UI text in `src/ui/strings.ts` so a later Italian localization only touches one file.
@@ -100,10 +105,10 @@ own GitHub remote — this checkout's `origin` still points at the upstream
 - **No persistence.** Documents live in the form fields for the lifetime of the page; nothing is
   written to `localStorage`, `sessionStorage`, IndexedDB or cookies. PDFs are read into memory and
   discarded when the page is closed.
-- **Data never leaves the browser.** Encoding, decoding, validation, QR generation, PDF parsing and
-  OCR are in-browser computation; uploaded QR images are read locally with `createImageBitmap`,
-  PDF bytes never leave the page, and nothing is transmitted. Clipboard and download use
-  browser-local APIs only.
+- **No document or extracted data is ever transmitted.** Encoding, decoding, validation, QR
+  generation, PDF parsing and OCR are in-browser computation; uploaded QR images are read locally
+  with `createImageBitmap`, PDF bytes never leave the page, and no document or extracted data is
+  sent anywhere. Clipboard and download use browser-local APIs only.
 - **The OCR engine is bundled, not fetched.** The tesseract.js worker, the LSTM WASM cores and the
   English/German traineddata are shipped under `public/tesseract/`, and Vite builds the pdf.js
   worker into the app's own asset directory. The libraries' default CDN endpoints are overridden and
@@ -140,15 +145,24 @@ own GitHub remote — this checkout's `origin` still points at the upstream
   differ from common tool defaults, so only the *decoded JSON* is guaranteed to round-trip.
   Do not expect byte-identical Base64 across tools; the app never compares or emits Base64 as a
   canonical value.
-- **PDF import targets one layout.** Only the printed eMediplan paper layout documented in
-  `chmed16a/README.md` (patient/provider blocks and the medication columns) is understood.
-  Free-form doctor letters, other generators' layouts and multi-prescription pages are out of
-  scope and fail with a parse finding ("no eMediplan prescription was found") instead of a guess.
-- **The author is inferred only when it is unambiguous.** `HcPerson` is taken from the provider
-  block; when that block is unnamed, a single distinct printed prescriber on the medication rows
-  supplies the name, but only if the document also prints a GLN (revision 3 requires
-  `HcPerson.Gln`). Two different printed doctors, or no printed GLN, leave `HcPerson` absent and
-  the validator reports it. `HcOrg` is never inferred: it is only the printed organisation block.
+- **PDF import targets one printed layout family.** Only the Swiss Medication Plan paper layout
+  (`Der Schweizer Medikationsplan`, documented in `chmed16a/README.md`) is understood. Free-form
+  doctor letters, other generators' layouts and multi-prescription pages are out of scope and
+  fail with a parse finding ("no eMediplan prescription was found") instead of a guess. The German
+  layout is the only one verified against a real PDF and a committed reference; French and Italian
+  paper layouts are recognised by vocabulary only and remain ground-truth-untested — a planned
+  follow-up, not a delivered feature.
+- **A multi-page medication table is not recomposed.** Each page is tabulated on its own and
+  joined in page order. A repeated column header is treated as a continuation, but a row that
+  physically splits across a page break is not stitched back together.
+- **Swissmedic ids depend on link annotations.** `IdType` 4 is used only when a link annotation on
+  the same page geometrically overlaps a medication row. A text-only print with no product links,
+  an OCR result (no vector geometry), or an id whose printed text does not parse keeps the printed
+  id text and `IdType` 1. Pairing annotations needs both a text layer and the tabulated row bands,
+  so the annotation path requires a text layer; an OCR document never has one.
+- **The committed examples are public sample identities.** The reference PDF and its derived
+  fixture come from the public "Der Schweizer Medikationsplan" HCI material; the patient,
+  prescriber and medication names in it are fictitious examples, not patient data.
 - **Encoding requires validation.** A prescription that fails `validateObject` is never encoded:
   the UI shows the rejected JSON as a draft and keeps the CHMED string, its copy/download buttons
   and the QR code empty, so a draft can never be mistaken for a transmittable document.

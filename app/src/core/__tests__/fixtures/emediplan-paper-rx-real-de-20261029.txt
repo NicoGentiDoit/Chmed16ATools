@@ -1,0 +1,68 @@
+erstellt von :
+Peter Muster
+01.11.1943 (M)
+2, Seidenhofstrasse, Altstadt, 6002 Luzern
+Körpergrösse / Gewicht: 180 cm/ 81 kg Der Schweizer Medikationsplan
+Niereninsuffizienz: leicht
+Diabetes: Unbekannt
+Allergie(n): Penicillin-Allergie, z.B. Amoxicillin, Flucloxacillin,
+Piperacillin
+Ausstellungsdatum: 29.10.2026 09:42
+Medikament | Morgen | Mittag | Abend | Nacht | Einheit | Von | Bis u. mit | Anleitung | Grund | Verordnet durch
+SORTIS Filmtabl 20 mg Atorvastatin | - | - | 1 | - | Milligramm Atorvastatin | 01.03.2016 |  |  | Cholesterinsenker | Dr. Arzt Hans, Münchenhausen
+CO-DIOVAN Filmtabl 160/12.5 mg Valsartan, Hydrochlorothiazid | 1 | - | - | - | Stück | 01.03.2016 |  |  | Bluthochdruck | Dr. Arzt Hans, Münchhausen
+VALIUM Inj Lös 10 mg/2ml i.m./i.v. Diazepam | 2 | - | - | - | ml | 03.11.2015 |  | nur i.m., nur durch instruierte Personen! | Beruhigung | Dr. Example Karl, Wängi
+Medikament | Morgen | Mittag | Abend | Nacht | Einheit | Von | Bis u. mit | Anleitung | Grund | Verordnet
+Essigwickel | - | - | - | - | - | 09.09.2016 |  | bei Bedarf | Fieber | Selbstmedikation
+PANADOL S Filmtabl 500 mg (#) Paracetamol | - | - | - | - | Stück | 09.09.2016 |  | bis zu max. 4 mal täglich 1 Tablette einnehmen | Schmerzen | Selbstmedikation
+===FLAT-TEXT===
+Der Schweizer Medikationsplan
+Peter Muster
+01.11.1943 (M)
+2, Seidenhofstrasse, Altstadt, 6002 Luzern
+Körpergrösse / Gewicht: 180 cm/ 81 kg
+Niereninsuffizienz:  leicht
+Diabetes:  Unbekannt
+Allergie(n):  Penicillin-Allergie, z.B. Amoxicillin, Flucloxacillin,
+Piperacillin
+erstellt von :
+Ausstellungsdatum: 29.10.2026 09:42
+Medikament  Morgen Mittag Abend
+zur
+Nacht Einheit  Von  Bis u. mit  Anleitung  Grund  Verordnet durch
+SORTIS Filmtabl 20 mg
+Atorvastatin  -  -  1  -
+Milligramm
+Atorvastatin
+01.03.2016  Cholesterinsenker
+Dr. Arzt Hans,
+Münchenhausen
+CO-DIOVAN Filmtabl
+160/12.5 mg
+Valsartan, Hydrochlorothiazid
+1  -  -  -  Stück  01.03.2016  Bluthochdruck
+Dr. Arzt Hans,
+Münchhausen
+VALIUM Inj Lös 10 mg/2ml
+i.m./i.v.
+Diazepam
+2  -  -  -  ml  03.11.2015  nur i.m., nur durch instruierte
+Personen!
+Beruhigung  Dr. Example Karl,
+Wängi
+Reservemedikation
+Medikament  Morgen Mittag Abend
+zur
+Nacht
+Einheit Von  Bis u. mit  Anleitung  Grund
+Verordnet
+durch
+Essigwickel  -  -  -  -  -  09.09.2016  bei Bedarf  Fieber  Selbstmedikation
+PANADOL S Filmtabl 500 mg
+(#)
+Paracetamol
+-  -  -  -  Stück 09.09.2016  bis zu max. 4 mal täglich 1 Tablette
+einnehmen
+Schmerzen Selbstmedikation
+Bemerkung :
+Der Patient ist vom Medikationsplan begeistert!

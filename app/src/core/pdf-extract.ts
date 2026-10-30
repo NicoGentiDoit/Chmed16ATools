@@ -41,6 +41,15 @@
  * installed pdfjs-dist build contains no `eval`/`new Function` path at all
  * (`isEvalSupported` was removed in v6), so font programs cannot execute.
  *
+ * ## Link annotations (phase 4)
+ *
+ * `extractPdfText` also harvests Link annotations (`page.getAnnotations()`),
+ * keeping only URIs that carry a Swissmedic `/product/<id>/MPub` id. Each record
+ * is `{ page, rect, productId }`, with the rect in the same page space as the
+ * text items (no viewport scaling on either side). The data is optional: absent
+ * for OCR-only documents and for PDFs without product links, and a page whose
+ * annotations cannot be read still contributes its text.
+ *
  * ## Text bounds (fail closed with `pdf-corrupt`)
  *
  * Extracted text is accumulated in memory, so a hostile PDF must not be able to
@@ -56,13 +65,23 @@
  * Both bounds report the existing typed code `pdf-corrupt`, so the Phase 3
  * pipeline maps them without a new error path. They are defence in depth: the
  * UI also refuses files larger than `MAX_PDF_BYTES` before reading them.
+ *
+ * The optional annotation and row-geometry arrays are bounded the same way:
+ * `MAX_PAGE_ANNOTATIONS` / `MAX_TOTAL_ANNOTATIONS` cap annotations per page and
+ * per document, and `MAX_TOTAL_MEDICATION_ROWS` caps the row geometry. Excess
+ * entries are dropped (the per-page collector already truncates), which is
+ * fail-closed: an annotation can only *upgrade* a row to `IdType 4`, so losing
+ * one leaves the printed-text identity, never a wrong binding. A truncated row
+ * geometry makes the parser's row/medicament count guard fire, which drops all
+ * `IdType 4` bindings and surfaces a warning (see
+ * `prescription-parse.ts`'s `PdfAnnotationContext` contract).
  */
 
-import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist';
+import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 import { columnKeyFor } from './prescription-parse';
-import type { ColumnKey } from './prescription-parse';
+import type { ColumnKey, PdfLinkAnnotation, PdfRowGeometry } from './prescription-parse';
 
 /**
  * Structural view of one entry of `TextContent.items`.
@@ -362,8 +381,29 @@ export type TabulateResult =
       readonly medicationTableCount: number;
       readonly medicationRowCount: number;
       readonly columnCount: number;
+      /**
+       * Geometry of every emitted medication row band, in document order (the
+       * same order as `medicationRowCount`). It is the bridge between the text
+       * the parser reads and the page-space rectangles of the link annotations.
+       *
+       * One entry per row band, not per parsed medicament: the parser verifies
+       * its medicament count against this array and drops all `IdType 4`
+       * bindings when they disagree (see `prescription-parse.ts`'s
+       * `PdfAnnotationContext`).
+       */
+      readonly medicationRows: readonly TabulatedRowGeometry[];
     }
   | { readonly ok: false; readonly errors: readonly TabulateError[] };
+
+/** Band of one tabulated medication row, in page space (points). */
+export interface TabulatedRowGeometry {
+  readonly top: number;
+  readonly bottom: number;
+  /** First-column (Medication) band: left edge of the printed name. */
+  readonly medicationLeft: number;
+  /** Right edge of the first column: midpoint to the next title. */
+  readonly medicationRight: number;
+}
 
 /** Column band of one table, derived from the printed header titles. */
 interface ColumnBand {
@@ -575,6 +615,28 @@ function cellsForRow(row: readonly LayoutGlyph[], columns: readonly ColumnBand[]
   return cells;
 }
 
+/**
+ * Horizontal band of the first (Medication) column.
+ *
+ * `columns[0].left` is `-Infinity` by construction, so the left edge is taken
+ * from the row's own glyphs; the right edge is the midpoint to the next column
+ * title. A row with no glyph in the first column yields an empty band
+ * (`+Infinity` left), which can never match an annotation.
+ */
+function medicationBand(
+  row: readonly LayoutGlyph[],
+  columns: readonly ColumnBand[],
+): { left: number; right: number } {
+  const right = columns[1]?.left ?? Number.POSITIVE_INFINITY;
+  let left = Number.POSITIVE_INFINITY;
+  for (const glyph of row) {
+    if (columnIndexFor(columns, glyph.x) === 0) {
+      left = Math.min(left, glyph.x);
+    }
+  }
+  return { left, right };
+}
+
 /** One non-table band as plain reading-order text. */
 function plainRowText(row: readonly LayoutGlyph[]): string {
   return [...row]
@@ -641,6 +703,7 @@ export function tabulateLayout(
   }
 
   const lines: string[] = [];
+  const medicationRows: TabulatedRowGeometry[] = [];
   let columns: readonly ColumnBand[] | undefined;
   let medicationTableCount = 0;
   let medicationRowCount = 0;
@@ -681,6 +744,13 @@ export function tabulateLayout(
       continue;
     }
 
+    const band = medicationBand(row, columns);
+    medicationRows.push({
+      top: highestY(row),
+      bottom: lowestY(row),
+      medicationLeft: band.left,
+      medicationRight: band.right,
+    });
     lines.push(cellsForRow(row, columns).join(TABULATED_CELL_SEPARATOR));
     medicationRowCount += 1;
   }
@@ -703,7 +773,184 @@ export function tabulateLayout(
     medicationTableCount,
     medicationRowCount,
     columnCount: columns.length,
+    medicationRows,
   };
+}
+
+/* ------------------------------------------------------------------------- *
+ * Link annotations (phase 4)
+ *
+ * The reference PDF carries Swissmedic product ids only in the Link annotations
+ * of the medication names. `collectLinkAnnotations` is the pure part of the
+ * adapter: it reduces the untrusted annotation objects (as returned by
+ * `page.getAnnotations()`) to `{ page, rect, productId }` records. The rect is
+ * read in the same page space as `readBox` reads text items (PDF user space,
+ * `y` upwards), so no viewport scaling is applied to either side and the two
+ * line up. URIs are parsed, never fetched or executed.
+ * ------------------------------------------------------------------------- */
+
+/** Upper bound on annotations read from one page (hostile PDFs). */
+export const MAX_PAGE_ANNOTATIONS = 10_000;
+
+/**
+ * Upper bound on annotations kept for the whole document (hostile PDFs).
+ *
+ * The per-page cap alone is unbounded across `MAX_PDF_PAGES` pages; this
+ * aggregate limit mirrors `MAX_TOTAL_TEXT_LENGTH` in scope, not in unit. The
+ * excess is dropped, which can only keep a row's printed-text identity.
+ */
+export const MAX_TOTAL_ANNOTATIONS = 50_000;
+
+/**
+ * Upper bound on tabulated medication-row geometry for the whole document.
+ *
+ * `tabulateLayout` already bounds rows per page (`MAX_ROWS`); this aggregate
+ * bound stops a many-page PDF from growing the geometry array without limit.
+ * A truncated geometry is detected by the parser (row count != medicament
+ * count), which then drops every `IdType 4` binding (see
+ * `prescription-parse.ts`'s `PdfAnnotationContext` contract).
+ */
+export const MAX_TOTAL_MEDICATION_ROWS = 50_000;
+
+/**
+ * Swissmedic product link: `…/product/<digits>/MPub` (case-insensitive). The
+ * `MPub` tail is required, and a query/fragment or the path end terminates it.
+ * Only the canonical digits are kept.
+ */
+const PRODUCT_URI_PATTERN = /\/product\/(\d{1,32})\/MPub(?:[/?#]|$)/i;
+
+/** A scheme, when present, must be a safe web scheme (see `productIdFromUri`). */
+const URI_SCHEME_PATTERN = /^([a-z][a-z0-9+.-]*):/i;
+
+/** Real product ids are at most 12 digits; canonicalization must not exceed it. */
+const MAX_PRODUCT_ID_DIGITS = 12;
+
+/**
+ * `/product/58356/MPub` → `58356`. Any other URI → `undefined` (ignored
+ * silently: it is not a product link).
+ *
+ * Fail-closed rules for untrusted URIs:
+ * - the trailing `/MPub` segment is required, so `/product/123/../admin` and
+ *   any other path cannot masquerade as a product link;
+ * - path traversal (`..`) anywhere in the URI is refused outright;
+ * - a scheme, when present, must be `http:`/`https:` (relative product paths
+ *   such as `/product/23846/MPub` stay valid);
+ * - leading zeros are stripped to the canonical id and an all-zero/empty id is
+ *   refused (`/product/000/MPub` → `undefined`).
+ *
+ * Pure and bounded; the URI is untrusted input and is never resolved.
+ */
+export function productIdFromUri(uri: string): string | undefined {
+  const value = uri.trim();
+  if (value.includes('..')) {
+    return undefined;
+  }
+  const scheme = URI_SCHEME_PATTERN.exec(value)?.[1]?.toLowerCase();
+  if (scheme !== undefined && scheme !== 'http' && scheme !== 'https') {
+    return undefined;
+  }
+  const match = PRODUCT_URI_PATTERN.exec(value);
+  const raw = match?.[1];
+  if (raw === undefined) {
+    return undefined;
+  }
+  const canonical = raw.replace(/^0+/, '');
+  if (canonical === '' || canonical.length > MAX_PRODUCT_ID_DIGITS) {
+    return undefined;
+  }
+  return canonical;
+}
+
+/** True for a Link annotation subtype (pdfjs spells it `subtype`). */
+function isLinkAnnotation(annotation: object): boolean {
+  if ('subtype' in annotation && typeof annotation.subtype === 'string') {
+    return annotation.subtype.toLowerCase() === 'link';
+  }
+  if ('subType' in annotation && typeof annotation.subType === 'string') {
+    return annotation.subType.toLowerCase() === 'link';
+  }
+  return false;
+}
+
+/** URI of a link annotation; pdfjs versions expose `url` or `uri`. */
+function linkUri(annotation: object): string | undefined {
+  if ('url' in annotation && typeof annotation.url === 'string') {
+    return annotation.url;
+  }
+  if ('uri' in annotation && typeof annotation.uri === 'string') {
+    return annotation.uri;
+  }
+  return undefined;
+}
+
+/**
+ * Annotation rect normalized to `[minX, minY, maxX, maxY]`, or `undefined` when
+ * the payload is missing, malformed or non-finite.
+ */
+function normalizedAnnotationRect(
+  annotation: object,
+): readonly [number, number, number, number] | undefined {
+  if (!('rect' in annotation) || !Array.isArray(annotation.rect)) {
+    return undefined;
+  }
+  const values: readonly unknown[] = annotation.rect;
+  const [x1, y1, x2, y2] = values;
+  if (
+    typeof x1 !== 'number' ||
+    typeof y1 !== 'number' ||
+    typeof x2 !== 'number' ||
+    typeof y2 !== 'number'
+  ) {
+    return undefined;
+  }
+  if (![x1, y1, x2, y2].every((value) => Number.isFinite(value))) {
+    return undefined;
+  }
+  return [Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2)];
+}
+
+/**
+ * Link annotations of one page, reduced to the product ids the parser maps.
+ *
+ * Non-Link annotations, malformed rects and non-product URIs are dropped; the
+ * result is bounded by {@link MAX_PAGE_ANNOTATIONS} and, when the caller passes
+ * a smaller `limit`, by that remaining document-wide budget. Never throws for
+ * garbage input: an unknown annotation shape is simply skipped.
+ */
+export function collectLinkAnnotations(
+  pageAnnotations: readonly unknown[],
+  page: number,
+  limit: number = MAX_PAGE_ANNOTATIONS,
+): PdfLinkAnnotation[] {
+  const bound = Number.isFinite(limit)
+    ? Math.min(Math.max(0, Math.floor(limit)), MAX_PAGE_ANNOTATIONS)
+    : MAX_PAGE_ANNOTATIONS;
+  const collected: PdfLinkAnnotation[] = [];
+  for (const annotation of pageAnnotations) {
+    if (collected.length >= bound) {
+      break;
+    }
+    if (typeof annotation !== 'object' || annotation === null) {
+      continue;
+    }
+    if (!isLinkAnnotation(annotation)) {
+      continue;
+    }
+    const uri = linkUri(annotation);
+    if (uri === undefined) {
+      continue;
+    }
+    const productId = productIdFromUri(uri);
+    if (productId === undefined) {
+      continue;
+    }
+    const rect = normalizedAnnotationRect(annotation);
+    if (rect === undefined) {
+      continue;
+    }
+    collected.push({ page, rect, productId });
+  }
+  return collected;
 }
 
 /* ------------------------------------------------------------------------- *
@@ -745,6 +992,27 @@ export interface PdfExtractedText {
    * the type so a caller that only provides a flat text layer stays valid.
    */
   readonly tabulatedText?: string;
+  /**
+   * Link annotations that carry a Swissmedic product id, in page order.
+   *
+   * Additive and absent when the document has none (OCR-only or plain text
+   * PDFs), so the older OCR-only result shape stays valid. Annotations exist
+   * only where a text layer exists; the OCR fallback has none by construction.
+   */
+  readonly annotations?: readonly PdfLinkAnnotation[];
+  /**
+   * Geometry of the medication rows of `tabulatedText`, in document order.
+   *
+   * Invariant: one entry per tabulated row band, not per medicament. The strict
+   * parser produces one medicament per printed row; a band it cannot turn into
+   * a medicament would desynchronise every later index, so the parser verifies
+   * the counts and drops all `IdType 4` bindings when they differ (see
+   * `prescription-parse.ts`'s `PdfAnnotationContext`).
+   *
+   * Present together with `annotations`; it is what lets the parser bind an
+   * annotation to its row. Absent when no medication table was tabulated.
+   */
+  readonly medicationRows?: readonly PdfRowGeometry[];
   readonly pageCount: number;
   /** False when the document has no non-whitespace text layer (scanned PDF). */
   readonly hasTextLayer: boolean;
@@ -804,6 +1072,21 @@ export function hasPdfMagic(bytes: Uint8Array): boolean {
 }
 
 /**
+ * Best-effort link annotations of one page.
+ *
+ * Annotations are optional data: a page whose annotation dictionary cannot be
+ * read still contributes its text layer (the row keeps the printed-text id), so
+ * the failure is swallowed rather than turned into `pdf-corrupt`.
+ */
+async function readPageAnnotations(page: PDFPageProxy): Promise<readonly unknown[]> {
+  try {
+    return await page.getAnnotations();
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Extracts the text layer of a PDF with pdfjs-dist.
  *
  * The worker is the app's own bundled `pdfjs-dist` worker (resolved by Vite to a
@@ -840,7 +1123,10 @@ export async function extractPdfText(bytes: Uint8Array): Promise<PdfExtractResul
 
     const pages: string[] = [];
     const tabulatedPages: string[] = [];
+    const annotations: PdfLinkAnnotation[] = [];
+    const medicationRows: PdfRowGeometry[] = [];
     let totalLength = 0;
+    let totalAnnotations = 0;
     for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
       const page = await pdfDocument.getPage(pageNumber);
       try {
@@ -848,11 +1134,31 @@ export async function extractPdfText(bytes: Uint8Array): Promise<PdfExtractResul
         if (content.items.length > MAX_PAGE_TEXT_ITEMS) {
           return fail('pdf-corrupt', TOO_MANY_ITEMS_MESSAGE);
         }
+        const annotationBudget = MAX_TOTAL_ANNOTATIONS - totalAnnotations;
+        if (annotationBudget > 0) {
+          const pageAnnotations = collectLinkAnnotations(
+            await readPageAnnotations(page),
+            pageNumber,
+            annotationBudget,
+          );
+          annotations.push(...pageAnnotations);
+          totalAnnotations += pageAnnotations.length;
+        }
         const pageText = normalizeTextItems(content.items);
         // Pure, local: a page whose geometry yields no table contributes an
         // empty tabulated page, so the pipeline keeps the flat text.
         const tabulated = tabulateLayout(content.items);
         const pageTabulated = tabulated.ok ? tabulated.text : '';
+        if (tabulated.ok) {
+          for (const row of tabulated.medicationRows) {
+            if (medicationRows.length >= MAX_TOTAL_MEDICATION_ROWS) {
+              // Truncation is fail-closed: the parser's row/medicament count
+              // guard drops all IdType-4 bindings instead of shifting them.
+              break;
+            }
+            medicationRows.push({ page: pageNumber, ...row });
+          }
+        }
         totalLength += pageText.length + pageTabulated.length + PDF_PAGE_SEPARATOR.length;
         if (totalLength > MAX_TOTAL_TEXT_LENGTH) {
           return fail('pdf-corrupt', TOO_MUCH_TEXT_MESSAGE);
@@ -870,6 +1176,8 @@ export async function extractPdfText(bytes: Uint8Array): Promise<PdfExtractResul
       value: {
         text,
         tabulatedText: tabulatedPages.join(PDF_PAGE_SEPARATOR),
+        ...(annotations.length > 0 ? { annotations } : {}),
+        ...(medicationRows.length > 0 ? { medicationRows } : {}),
         pageCount: pdfDocument.numPages,
         hasTextLayer: hasTextLayer(text),
       },

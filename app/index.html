@@ -11,33 +11,78 @@
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js" integrity="sha384-doD8MKhm6fBISLV8motWM1zGEVpnbszK5vXO5jHKZ1+rzP1cKd8TgKCI8mlzvY7n" crossorigin="anonymous" defer></script>
   </head>
   <body>
+    <!-- First focusable element in the document: jumps past the brand/nav to the work area. -->
+    <a id="skip-link" class="skip-link" href="#main-content"></a>
     <div id="app" class="app">
       <header class="app-header">
-        <h1 id="app-title"></h1>
-        <p id="app-description" class="app-description"></p>
-        <p id="app-tagline" class="notice notice-inline" role="note"></p>
+        <div class="app-header-bar">
+          <h1 class="brand-heading">
+            <button type="button" id="home-button" class="brand">
+              <span class="brand-mark" aria-hidden="true"></span>
+              <span class="brand-text">
+                <span id="app-title" class="brand-name"></span>
+                <span id="app-subtitle" class="brand-subtitle"></span>
+              </span>
+            </button>
+          </h1>
+          <span id="app-version" class="app-version"></span>
+        </div>
+
+        <nav class="app-nav">
+          <div class="app-tabs">
+            <div id="tablist" class="tablist" role="tablist"></div>
+          </div>
+        </nav>
       </header>
 
-      <div class="app-tabs">
-        <div id="tablist" class="tablist" role="tablist"></div>
-        <main class="tabpanels">
-          <section id="panel-json-to-chmed" class="tabpanel" role="tabpanel" tabindex="0"></section>
-          <section
-            id="panel-chmed-to-json"
-            class="tabpanel"
-            role="tabpanel"
-            tabindex="0"
-            hidden
-          ></section>
-          <section
-            id="panel-pdf-to-chmed"
-            class="tabpanel"
-            role="tabpanel"
-            tabindex="0"
-            hidden
-          ></section>
-        </main>
-      </div>
+      <main id="main-content" class="tabpanels" tabindex="-1">
+        <section id="view-home" class="view-home" aria-labelledby="home-heading">
+          <h2 id="home-heading" class="view-home-heading"></h2>
+          <p id="app-description" class="view-home-intro"></p>
+          <ul class="home-cards">
+            <li>
+              <article class="home-card">
+                <h3 id="home-card-json-title" class="home-card-title"></h3>
+                <p id="home-card-json-description" class="home-card-description"></p>
+                <span id="home-card-json-badge" class="home-card-badge"></span>
+                <button type="button" id="home-card-json-action" class="home-card-action"></button>
+              </article>
+            </li>
+            <li>
+              <article class="home-card">
+                <h3 id="home-card-chmed-title" class="home-card-title"></h3>
+                <p id="home-card-chmed-description" class="home-card-description"></p>
+                <span id="home-card-chmed-badge" class="home-card-badge"></span>
+                <button type="button" id="home-card-chmed-action" class="home-card-action"></button>
+              </article>
+            </li>
+            <li>
+              <article class="home-card">
+                <h3 id="home-card-pdf-title" class="home-card-title"></h3>
+                <p id="home-card-pdf-description" class="home-card-description"></p>
+                <span id="home-card-pdf-badge" class="home-card-badge"></span>
+                <button type="button" id="home-card-pdf-action" class="home-card-action"></button>
+              </article>
+            </li>
+          </ul>
+        </section>
+
+        <section id="panel-json-to-chmed" class="tabpanel" role="tabpanel" tabindex="0" hidden></section>
+        <section
+          id="panel-chmed-to-json"
+          class="tabpanel"
+          role="tabpanel"
+          tabindex="0"
+          hidden
+        ></section>
+        <section
+          id="panel-pdf-to-chmed"
+          class="tabpanel"
+          role="tabpanel"
+          tabindex="0"
+          hidden
+        ></section>
+      </main>
 
       <footer class="app-footer">
         <p id="app-disclaimer" class="notice" role="note"></p>

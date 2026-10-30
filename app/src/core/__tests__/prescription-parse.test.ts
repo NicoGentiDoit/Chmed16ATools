@@ -7,8 +7,12 @@ import realGermanFixture from './fixtures/emediplan-paper-rx-real-de.txt?raw';
 import minimalFixture from './fixtures/emediplan-paper-rx-minimal.txt?raw';
 import singleMedicamentFixture from './fixtures/emediplan-paper-rx.txt?raw';
 import twoMedicamentsFixture from './fixtures/emediplan-paper-rx-two-meds.txt?raw';
-import { parsePrescriptionText } from '../prescription-parse';
-import type { PrescriptionParseResult } from '../prescription-parse';
+import { mapAnnotationsToRows, parsePrescriptionText } from '../prescription-parse';
+import type {
+  PdfLinkAnnotation,
+  PdfRowGeometry,
+  PrescriptionParseResult,
+} from '../prescription-parse';
 import { validateObject } from '../validate';
 
 type Success = Extract<PrescriptionParseResult, { ok: true }>;
@@ -79,57 +83,59 @@ describe('parsePrescriptionText', () => {
       parsePrescriptionText(singleMedicamentFixture),
     );
 
-    expect(value.rev).toBe(3);
-    expect(value.MedType).toBe(3);
+    expect(value).not.toHaveProperty('rev');
+    expect(value.MedType).toBe(1);
     expect(value.Id).toMatch(UUID_V4);
     expect(value.Auth).toBe('7601000123456');
-    expect(value.Dt).toBe('2026-10-27');
+    expect(value.Dt).toBe('2026-10-27T09:15:00+01:00');
     expect(value.Patient).toEqual({
       FName: 'Hans',
       LName: 'Müller',
       BDt: '1962-03-14',
+      Lng: 'en',
       Gender: 1,
       Street: 'Rosenweg 5',
       Zip: '3000',
       City: 'Bern',
       Phone: '+41 79 123 45 67',
     });
-    expect(value.HcPerson).toEqual({ Gln: '7601000123456', FName: 'Anna', LName: 'Muster' });
-    expect(value.HcOrg).toEqual({
-      Name: 'Praxis Muster',
-      Street: 'Bahnhofstrasse 12',
-      Zip: '8001',
-      City: 'Zürich',
-    });
+    expect(value).not.toHaveProperty('HcPerson');
+    expect(value).not.toHaveProperty('HcOrg');
     expect(value.Medicaments).toEqual([
       {
         Id: 'Ramipril 5 mg',
         IdType: 1,
         Unit: 'Tablet',
         AppInstr: 'After a meal',
-        Pos: [{ DtTo: '2026-10-31', D: [1, 0, 0.5, 0] }],
+        TkgRsn: 'Hypertension',
+        PrscbBy: 'Dr. med. Anna Muster',
+        Pos: [{ DtFrom: '2026-10-01', DtTo: '2026-10-31', D: [1, 0, 0.5, 0] }],
+        Roa: 'PO',
       },
       {
         Id: 'Metformin 500 mg',
         IdType: 1,
         Unit: 'Tablet',
         AppInstr: 'With meals',
-        Pos: [{ D: [0, 1, 0, 1] }],
+        TkgRsn: 'Diabetes',
+        PrscbBy: 'Dr. med. Anna Muster',
+        Pos: [{ DtFrom: '2026-09-15', D: [0, 1, 0, 1] }],
+        Roa: 'PO',
       },
     ]);
     expect(warnings).toEqual([]);
 
-    // The parsed object is a valid revision-3 ePrescription (integration check).
+    // The parsed object is a valid Medication Plan (integration check).
     expect(validateObject(value).errors).toEqual([]);
   });
 
-  it('always emits rev 3 and never the rev-1 assumption warning', () => {
+  it('always emits MedType 1 and never an Rx revision', () => {
     const { value, warnings } = expectSuccess(
       parsePrescriptionText(minimalFixture),
     );
 
-    expect(value.rev).toBe(3);
-    expect(value.MedType).toBe(3);
+    expect(value).not.toHaveProperty('rev');
+    expect(value.MedType).toBe(1);
     expect(warnings.map((warning) => warning.code)).not.toContain('rev1-assumption');
   });
 
@@ -139,66 +145,71 @@ describe('parsePrescriptionText', () => {
     );
 
     expect(value.Auth).toBe('7601000987654');
-    expect(value.Dt).toBe('2026-10-28');
+    expect(value.Dt).toBe('2026-10-28T14:05:00+01:00');
     expect(value.Patient).toEqual({
       FName: 'Lena',
       LName: 'Keller',
       BDt: '1990-07-02',
+      Lng: 'en',
       Gender: 2,
       Street: 'Sonnenweg 8',
       Zip: '4059',
       City: 'Basel',
       Phone: '+41 61 222 33 44',
     });
-    expect(value.HcPerson).toEqual({ Gln: '7601000987654', FName: 'Peter', LName: 'Steiner' });
-    expect(value.HcOrg).toEqual({
-      Name: 'Apotheke am Markt',
-      Street: 'Marktgasse 4',
-      Zip: '4051',
-      City: 'Basel',
-    });
+    expect(value).not.toHaveProperty('HcPerson');
+    expect(value).not.toHaveProperty('HcOrg');
     expect(value.Medicaments).toEqual([
       {
         Id: '7680654340123',
         IdType: 2,
         Unit: 'Tablet',
         AppInstr: 'Take with water',
-        Pos: [{ DtTo: '2026-10-30', D: [0.25, 0.33, 0.67, 0.125] }],
+        TkgRsn: 'Pain',
+        AutoMed: 1,
+        Pos: [{ DtFrom: '2026-10-20', DtTo: '2026-10-30', D: [0.25, 0.33, 0.67, 0.125] }],
+        Roa: 'PO',
       },
       {
         Id: 'Amoxicillin 500 mg',
         IdType: 1,
         Unit: 'Capsule',
         AppInstr: 'Take every 8 hours',
-        Pos: [{ DtTo: '2026-11-02' }],
+        TkgRsn: 'Infection',
+        PrscbBy: 'Dr. med. Peter Steiner',
+        Pos: [{ DtFrom: '2026-10-26', DtTo: '2026-11-02' }],
+        Roa: 'PO',
       },
     ]);
   });
 
-  it('parses the minimal patient fixture and warns about the empty Auth', () => {
+  it('parses the minimal patient fixture and applies the Auth fallback', () => {
     const { value, warnings } = expectSuccess(
       parsePrescriptionText(minimalFixture),
     );
 
-    expect(value.Auth).toBe('');
+    // Locked Auth policy: no printed provider GLN → the literal "patient".
+    expect(value.Auth).toBe('patient');
     expect(value.Dt).toBe('2026-10-28');
     expect(value.Patient).toEqual({
       FName: 'Max',
       LName: 'Beispiel',
       BDt: '1970-01-01',
+      Lng: 'en',
       Gender: 1,
     });
-    expect(value.HcPerson).toBeUndefined();
-    expect(value.HcOrg).toBeUndefined();
+    expect(value).not.toHaveProperty('HcPerson');
+    expect(value).not.toHaveProperty('HcOrg');
     expect(value.Medicaments).toEqual([
       {
         Id: 'Paracetamol 500 mg',
         IdType: 1,
         Unit: 'Tablet',
-        Pos: [{ DtTo: '2026-10-31', D: [1, 1, 0, 0] }],
+        Pos: [{ DtFrom: '2026-10-28', DtTo: '2026-10-31', D: [1, 1, 0, 0] }],
+        Roa: 'PO',
       },
     ]);
-    expect(warnings).toEqual([{ code: 'empty-string', path: '/Auth', message: expect.any(String) }]);
+    expect(warnings).toEqual([]);
   });
 
   it('maps columns by their printed titles instead of their position', () => {
@@ -217,7 +228,8 @@ describe('parsePrescriptionText', () => {
         IdType: 1,
         Unit: 'Tablet',
         AppInstr: 'After food',
-        Pos: [{ DtTo: '2026-10-05', D: [2, 0, 0, 0] }],
+        Pos: [{ DtFrom: '', DtTo: '2026-10-05', D: [2, 0, 0, 0] }],
+        Roa: 'PO',
       },
     ]);
   });
@@ -349,17 +361,24 @@ describe('parsePrescriptionText', () => {
     }
   });
 
-  it('does not emit MP/PMC-only columns on an Rx medicament', () => {
+  it('emits the Medication Plan medicament fields and no Rx-only ones', () => {
     const { value } = expectSuccess(
       parsePrescriptionText(singleMedicamentFixture),
     );
     const keys = Object.keys(value.Medicaments?.[0] ?? {});
 
-    expect(keys).not.toContain('TkgRsn');
-    expect(keys).not.toContain('PrscbBy');
+    // Phase 2 maps the per-row printed fields.
+    expect(keys).toEqual(
+      expect.arrayContaining(['TkgRsn', 'PrscbBy', 'Roa', 'Pos']),
+    );
+    // Rx-only fields must never leak into the MP document.
+    expect(keys).not.toContain('Rep');
+    expect(keys).not.toContain('Subs');
+    expect(keys).not.toContain('NbPack');
+    expect(keys).not.toContain('IndC');
   });
 
-  it('reads optional Rep/Subs/NbPack/IndC cells when a row carries them', () => {
+  it('ignores Rx-only Rep/Subs/NbPack/IndC cells when a row carries them', () => {
     const { value } = expectSuccess(
       parsePrescriptionText(
         paperText([
@@ -368,12 +387,12 @@ describe('parsePrescriptionText', () => {
       ),
     );
 
-    expect(value.Medicaments?.[0]).toMatchObject({
-      Rep: 3,
-      NbPack: 2,
-      Subs: 1,
-      IndC: '12345.00',
-    });
+    const medicament = value.Medicaments?.[0];
+    expect(medicament).toMatchObject({ Id: 'Ibu 400 mg', IdType: 1, Unit: 'Tablet' });
+    expect(medicament).not.toHaveProperty('Rep');
+    expect(medicament).not.toHaveProperty('NbPack');
+    expect(medicament).not.toHaveProperty('Subs');
+    expect(medicament).not.toHaveProperty('IndC');
   });
 
   it('accepts ISO YYYY-MM-DD for the birth date and the issue date', () => {
@@ -416,8 +435,8 @@ describe('tolerant single-spaced layout', () => {
     expect(tolerant.value.Patient).toEqual(strict.value.Patient);
     expect(tolerant.value.Auth).toBe(strict.value.Auth);
     expect(tolerant.value.Dt).toBe(strict.value.Dt);
-    expect(tolerant.value.HcPerson).toEqual(strict.value.HcPerson);
-    expect(tolerant.value.HcOrg).toEqual(strict.value.HcOrg);
+    expect(tolerant.value).not.toHaveProperty('HcPerson');
+    expect(tolerant.value).not.toHaveProperty('HcOrg');
     expect(tolerant.value.Medicaments).toEqual(strict.value.Medicaments);
     expect(tolerant.value.Id).toMatch(UUID_V4);
     expect(validateObject(tolerant.value).errors).toEqual([]);
@@ -431,7 +450,8 @@ describe('tolerant single-spaced layout', () => {
 
     expect(tolerant.value.Medicaments).toEqual(strict.value.Medicaments);
     expect(tolerant.value.Patient).toEqual(strict.value.Patient);
-    expect(tolerant.value.HcPerson).toEqual(strict.value.HcPerson);
+    expect(tolerant.value).not.toHaveProperty('HcPerson');
+    expect(tolerant.value).not.toHaveProperty('HcOrg');
   });
 
   it('parses the minimal fixture with collapsed gaps', () => {
@@ -508,6 +528,29 @@ describe('tolerant single-spaced layout', () => {
 
     expect(tolerant.value.Medicaments).toEqual(strict.value.Medicaments);
   });
+
+  it('maps the phase-2 medicament fields on the tolerant path too', () => {
+    const header =
+      'Medikament | Morgen | Mittag | Abend | Nacht | Einheit | Von | Bis u. mit | Anwendungsinstruktion | Anwendungsgrund | Verordnet durch';
+    const spaced = paperText(
+      [
+        'Ibu 400 mg | 1 | - | - | - | Stück | 01.09.2026 | - | bei Bedarf | Fieber | Dr. med. A Muster',
+      ],
+      header,
+    );
+
+    const strict = expectSuccess(parsePrescriptionText(spaced));
+    const tolerant = expectSuccess(parsePrescriptionText(singleSpaced(spaced)));
+
+    expect(tolerant.value.Medicaments).toEqual(strict.value.Medicaments);
+    expect(tolerant.value.Medicaments?.[0]).toMatchObject({
+      Unit: 'Stk',
+      TkgRsn: 'Fieber',
+      PrscbBy: 'Dr. med. A Muster',
+      Roa: 'PO',
+      Pos: [{ DtFrom: '2026-09-01', D: [1, 0, 0, 0] }],
+    });
+  });
 });
 
 describe('real German eMediplan sample (geometry-tabulated text)', () => {
@@ -520,83 +563,208 @@ describe('real German eMediplan sample (geometry-tabulated text)', () => {
         IdType: 1,
         Unit: 'ml',
         AppInstr: 'nur i.m., nur durch instruierte Personen!',
-        Pos: [{ D: [2, 0, 0, 0] }],
+        TkgRsn: 'Beruhigung',
+        PrscbBy: 'Dr. Example Karl, Wängi',
+        Pos: [{ DtFrom: '2015-11-03', D: [2, 0, 0, 0] }],
+        Roa: 'IM',
       },
       {
         Id: 'SORTIS Filmtabl 20 mg Atorvastatin',
         IdType: 1,
-        Unit: 'Milligramm Atorvastatin',
-        Pos: [{ D: [0, 0, 1, 0] }],
+        Unit: 'mg',
+        TkgRsn: 'Cholesterinsenker',
+        PrscbBy: 'Dr. Arzt Hans, Münchenhausen',
+        Pos: [{ DtFrom: '2016-03-01', D: [0, 0, 1, 0] }],
+        Roa: 'PO',
       },
       {
         Id: 'CO-DIOVAN Filmtabl 160/12.5 mg Valsartan, Hydrochlorothiazid',
         IdType: 1,
-        Unit: 'Stück',
-        Pos: [{ D: [1, 0, 0, 0] }],
+        Unit: 'Stk',
+        TkgRsn: 'Bluthochdruck',
+        PrscbBy: 'Dr. Arzt Hans, Münchhausen',
+        Pos: [{ DtFrom: '2016-03-01', D: [1, 0, 0, 0] }],
+        Roa: 'PO',
       },
       {
         Id: 'PANADOL S Filmtabl 500 mg (#) Paracetamol',
         IdType: 1,
-        Unit: 'Stück',
+        Unit: 'Stk',
         AppInstr: 'bis zu max. 4 mal täglich 1 Tablette einnehmen',
+        TkgRsn: 'Schmerzen',
+        AutoMed: 1,
+        Pos: [{ DtFrom: '2016-09-09', InRes: 1, D: [0, 0, 0, 0] }],
+        Roa: 'PO',
       },
       {
         Id: 'Essigwickel',
         IdType: 1,
+        // The printed dash unit stays literal (the reference keeps `"-"`).
+        Unit: '-',
         AppInstr: 'bei Bedarf',
+        TkgRsn: 'Fieber',
+        AutoMed: 1,
+        Pos: [{ DtFrom: '2016-09-09', InRes: 1, D: [0, 0, 0, 0] }],
+        // No derivable route (topical wrap): `Roa` is omitted, never guessed.
       },
     ]);
   });
 
-  it('reads the unlabelled patient block and the German issue date', () => {
+  it('reads the unlabelled patient block, the German issue date and the medical data', () => {
     const { value } = expectSuccess(parsePrescriptionText(realGermanFixture));
 
     expect(value.Patient).toEqual({
       FName: 'Peter',
       LName: 'Muster',
       BDt: '1943-11-01',
+      Lng: 'de',
       Gender: 1,
       Street: '2, Seidenhofstrasse, Altstadt',
       Zip: '6002',
       City: 'Luzern',
+      Med: {
+        // Reference order: weight (Type 1 / kg = Unit 2) then height.
+        Meas: [
+          { Type: 1, Val: '81', Unit: 2 },
+          { Type: 2, Val: '180', Unit: 1 },
+        ],
+        // Renal light = RC 1 / 577; penicillin allergy = RC 6 / 571.
+        Rc: [
+          { Id: 1, R: [577] },
+          { Id: 6, R: [571] },
+        ],
+      },
     });
-    expect(value.Dt).toBe('2026-10-27');
-    expect(value.rev).toBe(3);
-    expect(value.MedType).toBe(3);
+    expect(value.Dt).toBe('2026-10-27T14:39:00+01:00');
+    expect(value).not.toHaveProperty('rev');
+    expect(value.MedType).toBe(1);
   });
 
-  it('never promotes the printed "Von" column to DtTo and never emits DtFrom', () => {
+  it('maps the printed "Von" column to DtFrom and never promotes it to DtTo', () => {
     const { value } = expectSuccess(parsePrescriptionText(realGermanFixture));
-    const serialized = JSON.stringify(value);
 
-    expect(serialized).not.toContain('DtFrom');
-    expect(serialized).not.toContain('DtTo');
     // The rows carry a printed from-date (03.11.2015, 01.03.2016, 09.09.2016)
-    // but no end date; Rx has no DtFrom, so the value is consumed and dropped.
-    expect(value.Medicaments?.every((medicament) => medicament.Pos === undefined
-      || medicament.Pos[0]?.DtTo === undefined)).toBe(true);
-  });
-
-  it('reports no invalid-value error, only the empty provider GLN warning', () => {
-    const { warnings } = expectSuccess(parsePrescriptionText(realGermanFixture));
-
-    expect(warnings).toEqual([{ code: 'empty-string', path: '/Auth', message: expect.any(String) }]);
-  });
-
-  it('surfaces the missing provider identity instead of inventing one', () => {
-    const { value } = expectSuccess(parsePrescriptionText(realGermanFixture));
-    const validation = validateObject(value, { medType: 3, rev: 3 });
-
-    // The sample prints `erstellt von :` without a value and no GLN anywhere, so
-    // revision 3 cannot be satisfied; the gap is reported, not filled in. The
-    // per-row prescribers name two different doctors, so the fix-round-3
-    // inference is ambiguous and deliberately sets nothing.
-    expect(value.HcPerson).toBeUndefined();
-    expect(value.HcOrg).toBeUndefined();
-    expect(validation.errors.map((error) => error.params)).toEqual([
-      { missingProperty: 'HcPerson' },
-      { missingProperty: 'HcOrg' },
+    // but no end date. `Von` is the posology start date; `Bis u. mit` stays
+    // empty, so no row claims an end date.
+    expect(value.Medicaments?.map((medicament) => medicament.Pos?.[0]?.DtFrom)).toEqual([
+      '2015-11-03',
+      '2016-03-01',
+      '2016-03-01',
+      '2016-09-09',
+      '2016-09-09',
     ]);
+    expect(
+      value.Medicaments?.every(
+        (medicament) => medicament.Pos?.[0]?.DtTo === undefined,
+      ),
+    ).toBe(true);
+  });
+
+  it('normalizes the printed units and reports the unmappable route', () => {
+    const { value, warnings } = expectSuccess(parsePrescriptionText(realGermanFixture));
+
+    // SORTIS's tabulation leak (the substance line in the unit cell) is
+    // stripped to its first token; `Stück` becomes `Stk`; the wrap keeps the
+    // printed dash.
+    expect(value.Medicaments?.map((medicament) => medicament.Unit)).toEqual([
+      'ml',
+      'mg',
+      'Stk',
+      'Stk',
+      '-',
+    ]);
+    // Essigwickel has no derivable route; the warning is non-blocking.
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        {
+          code: 'unknown-field',
+          path: '/Medicaments/4/Roa',
+          message: expect.stringContaining('"Roa" is omitted'),
+        },
+      ]),
+    );
+  });
+
+  it('keeps a recognized identity unit and warns when the cell leaks a substance line', () => {
+    const { value, warnings } = expectSuccess(
+      parsePrescriptionText(
+        paperText([
+          'Ramipril 5 mg | 1 | - | - | - | Tabletten Wirkstoff | 01.09.2026 | - | | | Dr. med. A Muster',
+        ]),
+      ),
+    );
+
+    // The identity unit is kept in its printed spelling; the leaked substance
+    // line is discarded and reported instead of being smuggled into `Unit`.
+    expect(value.Medicaments?.[0]?.Unit).toBe('Tabletten');
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'unknown-field',
+          path: '/Medicaments/0/Unit',
+          message: expect.stringContaining('only "Tabletten" is kept'),
+        }),
+      ]),
+    );
+  });
+
+  it('omits Roa for ambiguous solution/ampoule forms unless a route token decides', () => {
+    const ambiguous = expectSuccess(
+      parsePrescriptionText(
+        paperText([
+          'Testmedikament Suspension | 1 | - | - | - | Tablet | 01.09.2026 | - | | | Dr. med. A Muster',
+          'Testmedikament Lösung | 1 | - | - | - | Tablet | 01.09.2026 | - | | | Dr. med. A Muster',
+        ]),
+      ),
+    );
+
+    expect(ambiguous.value.Medicaments?.map((medicament) => medicament.Roa)).toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(
+      ambiguous.warnings.filter((warning) => warning.path.endsWith('/Roa')),
+    ).toHaveLength(2);
+
+    // The explicit `i.m./i.v.` token keeps precedence over the `Lös` form word.
+    const valium = expectSuccess(parsePrescriptionText(realGermanFixture));
+    expect(valium.value.Medicaments?.[0]).toMatchObject({ Roa: 'IM' });
+  });
+
+  it('applies the Auth fallback, reports the unmappable diabetes and omits nothing else', () => {
+    const { value, warnings } = expectSuccess(parsePrescriptionText(realGermanFixture));
+
+    // No provider GLN is printed: the locked fallback is the literal "patient".
+    expect(value.Auth).toBe('patient');
+    expect(warnings).toEqual([
+      {
+        code: 'unknown-field',
+        path: '/Medicaments/4/Roa',
+        message: expect.stringContaining('"Roa" is omitted'),
+      },
+      {
+        code: 'unknown-field',
+        path: '/Patient/Med/Rc',
+        message: expect.stringContaining('"Unbekannt"'),
+      },
+    ]);
+    // Every warning is a genuinely unmappable printed item, never a validator
+    // error.
+    expect(warnings.every((warning) => warning.code === 'unknown-field')).toBe(true);
+  });
+
+  it('validates as a Medication Plan with no validator warnings and no provider identity', () => {
+    const { value } = expectSuccess(parsePrescriptionText(realGermanFixture));
+    const validation = validateObject(value);
+
+    // The sample prints `erstellt von :` without a value and no GLN anywhere;
+    // the parser applies the literal "patient" Auth and detects German, so the
+    // MP-required gaps are closed. The only findings left are the parser's
+    // genuinely unmappable items (topical route, unknown diabetes type).
+    expect(value).not.toHaveProperty('HcPerson');
+    expect(value).not.toHaveProperty('HcOrg');
+    expect(validation.errors).toEqual([]);
+    expect(validation.warnings).toEqual([]);
   });
 
   it('fails closed on the raw adapter text of the same page', () => {
@@ -619,52 +787,87 @@ describe('2023 German eMediplan sample (fix round 4)', () => {
       parsePrescriptionText(realGerman2023Fixture),
     );
 
-    expect(value.Dt).toBe('2023-02-09');
+    expect(value.Dt).toBe('2023-02-09T09:42:00+01:00');
     expect(value.Medicaments).toEqual([
       {
         Id: 'ANTIBIOTIKUM Tabl 800/160mg Disulfontetraprim, Monoketozam',
         IdType: 1,
         Unit: 'Stk',
         AppInstr: 'nach dem Essen',
-        Pos: [{ DtTo: '2023-02-19', D: [1, 0, 1, 0] }],
+        TkgRsn: 'Infektion',
+        PrscbBy: 'Dr. Not Franz, Frauenfeld',
+        Pos: [{ DtFrom: '2023-02-09', DtTo: '2023-02-19', D: [1, 0, 1, 0] }],
+        Roa: 'PO',
       },
       {
         Id: 'CO-ANTIHYP Filmtabl 160/12.5 mg Balsorten, Hydronatriazid',
         IdType: 1,
         Unit: 'Stk',
-        Pos: [{ D: [1, 0, 0, 0] }],
+        TkgRsn: 'Bluthochdruck',
+        PrscbBy: 'Dr. Sarah Docteur, Porrentruy',
+        Pos: [{ DtFrom: '', D: [1, 0, 0, 0] }],
+        Roa: 'PO',
       },
       {
         Id: 'CHOLES Filmtabl 20 mg Otamustitan',
         IdType: 1,
         Unit: 'Stk',
-        Pos: [{ D: [0.5, 0, 1, 0] }],
+        TkgRsn: 'Cholesterinsenker',
+        PrscbBy: 'Dr. Sévérine Example, Martigny',
+        Pos: [{ DtFrom: '', D: [0.5, 0, 1, 0] }],
+        Roa: 'PO',
       },
       {
         Id: 'ANTIKRAMPF Inj Lös 10 mg/2ml i.m./i.v. Trifluopam',
         IdType: 1,
         Unit: 'ml',
         AppInstr: 'nur i.m., nur durch instruierte Personen!',
-        Pos: [{ D: [2, 0, 0, 0] }],
+        TkgRsn: 'Beruhigung',
+        PrscbBy: 'Dr. Karl Rezept, Langenthal',
+        Pos: [{ DtFrom: '', D: [2, 0, 0, 0] }],
+        Roa: 'IM',
       },
       {
         Id: 'Essigwickel',
         IdType: 1,
+        Unit: '-',
         AppInstr: 'bei Bedarf',
+        TkgRsn: 'Fieber',
+        AutoMed: 1,
+        Pos: [{ DtFrom: '', D: [0, 0, 0, 0] }],
       },
       {
         Id: 'ANTIPYRETIC Filmtabl 500 mg Antipyretic',
         IdType: 1,
+        Unit: '',
         AppInstr: 'bis zu max. 4 mal täglich 1 Tablette einnehmen',
+        TkgRsn: 'Schmerzen',
+        AutoMed: 1,
+        Roa: 'PO',
       },
     ]);
-    expect(warnings).toEqual([{ code: 'empty-string', path: '/Auth', message: expect.any(String) }]);
+    // Blank `Von` rows keep the required `DtFrom` placeholder with a warning;
+    // the topical wrap has no derivable route.
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'empty-string',
+          path: '/Medicaments/1/Pos/0/DtFrom',
+        }),
+        expect.objectContaining({
+          code: 'unknown-field',
+          path: '/Medicaments/4/Roa',
+        }),
+      ]),
+    );
+    expect(warnings).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: '/Auth' })]),
+    );
   });
 
-  it('never emits DtFrom for the printed "Von" column', () => {
+  it('maps "Von" to DtFrom and only the printed "Bis u. mit" to DtTo', () => {
     const { value } = expectSuccess(parsePrescriptionText(realGerman2023Fixture));
 
-    expect(JSON.stringify(value)).not.toContain('DtFrom');
     // `ANTIBIOTIKUM` is the only row with a printed end date; `ANTIKRAMPF`
     // prints a `Von` value but no `Bis u. mit`, so it keeps no `DtTo`.
     expect(value.Medicaments?.map((medicament) => medicament.Pos?.[0]?.DtTo ?? null)).toEqual([
@@ -675,23 +878,30 @@ describe('2023 German eMediplan sample (fix round 4)', () => {
       null,
       null,
     ]);
+    // `Von` is the posology start date; a blank cell keeps the `''` placeholder.
+    expect(value.Medicaments?.map((medicament) => medicament.Pos?.[0]?.DtFrom ?? null)).toEqual([
+      '2023-02-09',
+      '',
+      '',
+      '',
+      '',
+      null,
+    ]);
   });
 
-  it('stays validate-blocked on the missing provider identity and invents none', () => {
+  it('validates as a Medication Plan and invents no provider identity', () => {
     const { value } = expectSuccess(parsePrescriptionText(realGerman2023Fixture));
 
     // No GLN / organisation is printed and four different doctors are named per
-    // row, so the round-3 inference stays deliberately ambiguous.
-    expect(value.HcPerson).toBeUndefined();
-    expect(value.HcOrg).toBeUndefined();
-    expect(validateObject(value, { medType: 3, rev: 3 }).errors.map((error) => error.params)).toEqual([
-      { missingProperty: 'HcPerson' },
-      { missingProperty: 'HcOrg' },
-    ]);
+    // row. MP has no provider-identity block, so nothing is invented and nothing
+    // is required.
+    expect(value).not.toHaveProperty('HcPerson');
+    expect(value).not.toHaveProperty('HcOrg');
+    expect(validateObject(value).errors).toEqual([]);
   });
 });
 
-describe('author inference from the "Prescribed by" column (fix round 3)', () => {
+describe('provider block on the Medication Plan path', () => {
   const GLN = '7601000123456';
 
   /** Patient + issue date + an optional provider block + the printed table. */
@@ -712,136 +922,66 @@ describe('author inference from the "Prescribed by" column (fix round 3)', () =>
     return `Ramipril 5 mg | 1 | 0 | 0 | 0 | Tablet | 01.09.2026 | 30.09.2026 | After a meal | Hypertension | ${prescriber} |`;
   }
 
-  it('infers HcPerson from one consistent prescriber and adds no HcOrg', () => {
+  // Deliberate rewrite (plan 006 phase 1): the PDF path is a Medication Plan,
+  // which has no `HcPerson`/`HcOrg` and no document author. The Rx author
+  // inference is retired; the printed `Prescribed by` column becomes
+  // `MedicamentMp.PrscbBy` in phase 2, so this suite now pins what MP actually
+  // keeps from the provider block: `Auth` only.
+
+  it('keeps the printed GLN as Auth and emits no provider identity', () => {
     const { value } = expectSuccess(
       parsePrescriptionText(
-        authorText([`GLN: ${GLN}`], [row('Dr. med. Anna Muster'), row('Dr. med. Anna Muster')]),
+        authorText(
+          ['Created by: Dr. med. Anna Muster', 'Organisation: Praxis Muster', `GLN: ${GLN}`],
+          [row('Dr. med. Anna Muster'), row('Dr. med. Bruno Arzt')],
+        ),
       ),
     );
 
-    expect(value.HcPerson).toEqual({ Gln: GLN, FName: 'Anna', LName: 'Muster' });
-    // `HcOrg` is only ever the printed organisation block, never inferred.
-    expect(value.HcOrg).toBeUndefined();
     expect(value.Auth).toBe(GLN);
+    expect(value).not.toHaveProperty('HcPerson');
+    expect(value).not.toHaveProperty('HcOrg');
+    expect(value).not.toHaveProperty('rev');
+    expect(value.Medicaments?.[0]).toMatchObject({
+      TkgRsn: 'Hypertension',
+      PrscbBy: 'Dr. med. Anna Muster',
+      Roa: 'PO',
+    });
+    expect(validateObject(value).errors).toEqual([]);
   });
 
-  it('drops the honorific and the printed city line of the cell', () => {
-    const { value } = expectSuccess(
-      parsePrescriptionText(authorText([`GLN: ${GLN}`], [row('Dr. Example Karl, Wängi')])),
-    );
-
-    expect(value.HcPerson).toEqual({ Gln: GLN, FName: 'Example', LName: 'Karl' });
-  });
-
-  it('ignores self-medication markers, empty cells and the printed dash', () => {
-    const { value } = expectSuccess(
-      parsePrescriptionText(
-        authorText(
-          [`GLN: ${GLN}`],
-          [row('Selbstmedikation'), row(''), row('-'), row('Dr. med. Anna Muster')],
-        ),
-      ),
-    );
-
-    expect(value.HcPerson).toEqual({ Gln: GLN, FName: 'Anna', LName: 'Muster' });
-  });
-
-  it('infers nothing when only self-medication rows are printed', () => {
-    const { value } = expectSuccess(
-      parsePrescriptionText(
-        authorText([`GLN: ${GLN}`], [row('Selbstmedikation'), row('Self medication')]),
-      ),
-    );
-
-    expect(value.HcPerson).toBeUndefined();
-  });
-
-  it('drops a self-medication cell whose printed reason is glued to it', () => {
-    // The 2023 layout can glue `Fieber` into the `Verordnet` band cell. The
-    // prefix form of the marker must still name no prescriber, otherwise the
-    // glued text would fake a second author and defeat the inference.
-    const { value } = expectSuccess(
-      parsePrescriptionText(
-        authorText(
-          [`GLN: ${GLN}`],
-          [
-            row('Selbstmedikation Fieber'),
-            row('Dr. med. Anna Muster'),
-            row('Selbstmedikation Schmerzen'),
-          ],
-        ),
-      ),
-    );
-
-    expect(value.HcPerson).toEqual({ Gln: GLN, FName: 'Anna', LName: 'Muster' });
-  });
-
-  it('infers nothing from two distinct prescribers (no error of its own)', () => {
+  it('falls back to the literal "patient" Auth when no GLN is printed', () => {
     const { value, warnings } = expectSuccess(
-      parsePrescriptionText(
-        authorText(
-          [`GLN: ${GLN}`],
-          [row('Dr. med. Anna Muster'), row('Dr. med. Bruno Arzt'), row('Dr. med. Anna Muster')],
-        ),
-      ),
-    );
-
-    // Ambiguity is not a parse error: the validator keeps reporting the missing
-    // required `HcPerson`/`HcOrg` exactly as before the inference existed.
-    expect(value.HcPerson).toBeUndefined();
-    expect(warnings.map((warning) => warning.code)).not.toContain('invalid-value');
-    expect(validateObject(value, { medType: 3, rev: 3 }).errors.map((error) => error.params)).toEqual([
-      { missingProperty: 'HcPerson' },
-      { missingProperty: 'HcOrg' },
-    ]);
-  });
-
-  it('keeps a named provider block as the author', () => {
-    const { value } = expectSuccess(
-      parsePrescriptionText(
-        authorText(
-          ['Created by: Dr. med. Anna Muster', `GLN: ${GLN}`],
-          [row('Dr. med. Bruno Arzt')],
-        ),
-      ),
-    );
-
-    // Document-level authorship wins over the per-row column: inference is
-    // additive and never overrides printed data.
-    expect(value.HcPerson).toEqual({ Gln: GLN, FName: 'Anna', LName: 'Muster' });
-  });
-
-  it('needs a printed GLN, because HcPerson.Gln is required', () => {
-    const { value } = expectSuccess(
       parsePrescriptionText(authorText([], [row('Dr. med. Anna Muster')])),
     );
 
-    expect(value.HcPerson).toBeUndefined();
+    expect(value.Auth).toBe('patient');
+    expect(warnings).toEqual([]);
+    expect(validateObject(value).errors).toEqual([]);
   });
 
-  it('infers the same author on the tolerant single-spaced path', () => {
-    const spaced = authorText([`GLN: ${GLN}`], [row('Dr. med. Anna Muster'), row('Dr. med. Anna Muster')]);
+  it('keeps the same Auth on the tolerant single-spaced path', () => {
+    const spaced = authorText(
+      [`GLN: ${GLN}`],
+      [row('Dr. med. Anna Muster'), row('Dr. med. Anna Muster')],
+    );
     const strict = expectSuccess(parsePrescriptionText(spaced));
     const tolerant = expectSuccess(parsePrescriptionText(singleSpaced(spaced)));
 
-    expect(tolerant.value.HcPerson).toEqual(strict.value.HcPerson);
-    expect(tolerant.value.HcPerson).toEqual({ Gln: GLN, FName: 'Anna', LName: 'Muster' });
+    expect(tolerant.value.Auth).toBe(strict.value.Auth);
+    expect(tolerant.value.Auth).toBe(GLN);
+    expect(tolerant.value.Medicaments).toEqual(strict.value.Medicaments);
   });
 
-  it('validates and encodes the real one-doctor sample variant', () => {
+  it('validates the real one-doctor sample variant as a Medication Plan', () => {
     const { value } = expectSuccess(parsePrescriptionText(realGermanOneDoctorFixture));
 
-    // Derived from the committed real HCI sample: the per-row prescribers are
-    // unified to one doctor and the document-level provider block, left empty in
-    // the template, is filled (synthetic placeholder GLN) because revision 3
-    // requires HcPerson.Gln and HcOrg.
-    expect(value.HcPerson).toEqual({ Gln: '7600000000000', FName: 'Example', LName: 'Karl' });
-    expect(value.HcOrg).toEqual({
-      Name: 'Praxis Dr. Example Karl',
-      Street: 'Hauptstrasse 1',
-      Zip: '8355',
-      City: 'Wängi',
-    });
+    // Derived from the committed real HCI sample: it prints a provider block
+    // with a (synthetic placeholder) GLN. MP keeps only that GLN as `Auth`.
+    expect(value.Auth).toBe('7600000000000');
+    expect(value).not.toHaveProperty('HcPerson');
+    expect(value).not.toHaveProperty('HcOrg');
+    expect(value.Medicaments).toHaveLength(5);
     expect(validateObject(value).errors).toEqual([]);
   });
 });
@@ -867,9 +1007,12 @@ describe('real-world paper variations', () => {
     expect(value.Medicaments?.[0]).toEqual({
       Id: 'Ibu 400 mg',
       IdType: 1,
-      Unit: 'Stück',
+      Unit: 'Stk',
       AppInstr: 'bei Bedarf',
-      Pos: [{ D: [1, 0, 0, 0] }],
+      TkgRsn: 'Fieber',
+      AutoMed: 1,
+      Pos: [{ DtFrom: '', D: [1, 0, 0, 0] }],
+      Roa: 'PO',
     });
   });
 
@@ -885,11 +1028,16 @@ describe('real-world paper variations', () => {
       ),
     );
 
-    expect(result.warnings.map((warning) => warning.code)).toEqual(['empty-string']);
+    expect(result.warnings.map((warning) => warning.path)).toEqual([]);
     expect(result.value.Medicaments?.[0]).toEqual({
       Id: 'Ibu 400 mg',
       IdType: 1,
+      // The printed dash unit stays literal; the unit column is not blank.
+      Unit: '-',
       AppInstr: 'bei Bedarf',
+      TkgRsn: 'Fieber',
+      AutoMed: 1,
+      Roa: 'PO',
     });
   });
 
@@ -910,7 +1058,32 @@ describe('real-world paper variations', () => {
 
     const medicament = value.Medicaments?.[0];
     expect(medicament?.Pos?.[0]?.DtTo).toBe('2023-02-19');
+    expect(medicament?.Pos?.[0]?.DtFrom).toBe('');
     expect(medicament?.AppInstr).toBeUndefined();
+    // The glued `Selbstmedikation` cell sets AutoMed and never fabricates an
+    // author from the marker.
+    expect(medicament?.AutoMed).toBe(1);
+    expect(medicament).not.toHaveProperty('PrscbBy');
+  });
+
+  it('reads a glued "Selbstmedikation Fieber" prescriber cell as self-medication', () => {
+    const { value } = expectSuccess(
+      parsePrescriptionText(
+        paperText(
+          [
+            'Ibu 400 mg | 1 | - | - | - | Stk | 01.09.2026 | - | bei Bedarf |  | Selbstmedikation Fieber',
+          ],
+          german2023Header,
+        ),
+      ),
+    );
+
+    const medicament = value.Medicaments?.[0];
+    // The start-anchored prefix keeps a glued cell from becoming an author;
+    // the trailing printed reason is recovered when the Reason cell is empty.
+    expect(medicament?.AutoMed).toBe(1);
+    expect(medicament).not.toHaveProperty('PrscbBy');
+    expect(medicament?.TkgRsn).toBe('Fieber');
   });
 
   it('reads the German titles "Einheit" and "Anleitung"', () => {
@@ -926,13 +1099,16 @@ describe('real-world paper variations', () => {
     expect(value.Medicaments?.[0]).toEqual({
       Id: 'Ibu 400 mg',
       IdType: 1,
-      Unit: 'Stück',
+      Unit: 'Stk',
       AppInstr: 'bei Bedarf',
-      Pos: [{ D: [1, 0, 0, 0] }],
+      TkgRsn: 'Fieber',
+      PrscbBy: 'Dr. med. A Muster',
+      Pos: [{ DtFrom: '2026-09-01', D: [1, 0, 0, 0] }],
+      Roa: 'PO',
     });
   });
 
-  it('reads "-" as an empty dose cell, an omitted unit and no end date', () => {
+  it('keeps a printed "-" unit literal and maps the start date', () => {
     const { value } = expectSuccess(
       parsePrescriptionText(
         paperText(
@@ -945,12 +1121,14 @@ describe('real-world paper variations', () => {
     expect(value.Medicaments?.[0]).toEqual({
       Id: 'Ibu 400 mg',
       IdType: 1,
-      Pos: [{ D: [2, 0, 0, 0] }],
+      Unit: '-',
+      Pos: [{ DtFrom: '2026-09-01', D: [2, 0, 0, 0] }],
+      Roa: 'PO',
     });
   });
 
-  it('keeps "-" rows without a dose vector out of Pos', () => {
-    const { value } = expectSuccess(
+  it('keeps four printed dashes as an all-zero dose vector', () => {
+    const { value, warnings } = expectSuccess(
       parsePrescriptionText(
         paperText(
           ['Essigwickel | - | - | - | - | - | 09.09.2016 | - | bei Bedarf | Fieber | Selbstmedikation'],
@@ -962,8 +1140,21 @@ describe('real-world paper variations', () => {
     expect(value.Medicaments?.[0]).toEqual({
       Id: 'Essigwickel',
       IdType: 1,
+      Unit: '-',
       AppInstr: 'bei Bedarf',
+      TkgRsn: 'Fieber',
+      AutoMed: 1,
+      Pos: [{ DtFrom: '2016-09-09', D: [0, 0, 0, 0] }],
+      // No derivable route for a topical wrap.
     });
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'unknown-field',
+          path: '/Medicaments/0/Roa',
+        }),
+      ]),
+    );
   });
 
   it('appends the reserve table rows and re-derives its column layout', () => {
@@ -985,8 +1176,21 @@ describe('real-world paper variations', () => {
     const { value } = expectSuccess(parsePrescriptionText(text));
 
     expect(value.Medicaments).toEqual([
-      { Id: 'Ramipril 5 mg', IdType: 1, Unit: 'Stück', AppInstr: 'morgens', Pos: [{ D: [1, 0, 0, 0] }] },
-      { Id: 'Ibuprofen 400 mg', IdType: 1, Unit: 'Stück', Pos: [{ DtTo: '2026-10-05', D: [0, 0, 0, 2] }] },
+      {
+        Id: 'Ramipril 5 mg',
+        IdType: 1,
+        Unit: 'Stk',
+        AppInstr: 'morgens',
+        Pos: [{ DtFrom: '2026-09-01', D: [1, 0, 0, 0] }],
+        Roa: 'PO',
+      },
+      {
+        Id: 'Ibuprofen 400 mg',
+        IdType: 1,
+        Unit: 'Stk',
+        Pos: [{ DtFrom: '', DtTo: '2026-10-05', InRes: 1, D: [0, 0, 0, 2] }],
+        Roa: 'PO',
+      },
     ]);
   });
 
@@ -1027,5 +1231,399 @@ describe('real-world paper variations', () => {
     const { value } = expectSuccess(parsePrescriptionText(text));
 
     expect(value.Medicaments?.map((medicament) => medicament.Id)).toEqual(['Ramipril 5 mg']);
+  });
+});
+
+describe('patient medical data, language, remark and issue time (phase 3)', () => {
+  const germanHeader =
+    'Medikament | Morgen | Mittag | Abend | Nacht | Einheit | Von | Bis u. mit | Anleitung | Grund | Verordnet durch';
+
+  /** Patient block with an optional medical line + a single printed row. */
+  function medicalText(extraLines: readonly string[]): string {
+    return [
+      'Peter Muster',
+      '01.11.1943 (M)',
+      '2, Seidenhofstrasse, Altstadt, 6002 Luzern',
+      ...extraLines,
+      'Ausstellungsdatum: 29.10.2026 09:42',
+      germanHeader,
+      'Ramipril 5 mg | 1 | - | - | - | Stück | 01.09.2026 | - | morgens | Bluthochdruck | Dr. med. A Muster',
+    ].join('\n');
+  }
+
+  it('parses the combined height/weight line in reference order and tolerates reordering', () => {
+    const printed = expectSuccess(
+      parsePrescriptionText(medicalText(['Körpergrösse / Gewicht: 180 cm / 81 kg'])),
+    );
+    const reordered = expectSuccess(
+      parsePrescriptionText(medicalText(['Körpergrösse / Gewicht: 81 kg / 180 cm'])),
+    );
+
+    const expected = [
+      { Type: 1, Val: '81', Unit: 2 },
+      { Type: 2, Val: '180', Unit: 1 },
+    ];
+    expect(printed.value.Patient.Med?.Meas).toEqual(expected);
+    expect(reordered.value.Patient.Med?.Meas).toEqual(expected);
+    expect(printed.warnings).toEqual([]);
+  });
+
+  it('omits an absent measurement member with a warning instead of inventing it', () => {
+    const { value, warnings } = expectSuccess(
+      parsePrescriptionText(medicalText(['Körpergrösse / Gewicht: 180 cm'])),
+    );
+
+    expect(value.Patient.Med?.Meas).toEqual([{ Type: 2, Val: '180', Unit: 1 }]);
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        {
+          code: 'unknown-field',
+          path: '/Patient/Med/Meas',
+          message: expect.stringContaining('weight'),
+        },
+      ]),
+    );
+  });
+
+  it('maps renal light and penicillin allergy, and warns instead of inventing unknown diabetes', () => {
+    const { value, warnings } = expectSuccess(
+      parsePrescriptionText(
+        medicalText([
+          'Niereninsuffizienz: leicht',
+          'Diabetes: Unbekannt',
+          'Allergie(n): Penicillin-Allergie, z.B. Amoxicillin, Flucloxacillin, Piperacillin',
+        ]),
+      ),
+    );
+
+    expect(value.Patient.Med?.Rc).toEqual([
+      { Id: 1, R: [577] },
+      { Id: 6, R: [571] },
+    ]);
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        {
+          code: 'unknown-field',
+          path: '/Patient/Med/Rc',
+          message: expect.stringContaining('"Unbekannt"'),
+        },
+      ]),
+    );
+  });
+
+  it('omits an unmappable allergy line with a warning', () => {
+    const { value, warnings } = expectSuccess(
+      parsePrescriptionText(medicalText(['Allergie(n): Erdbeeren'])),
+    );
+
+    expect(value.Patient.Med?.Rc).toBeUndefined();
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        {
+          code: 'unknown-field',
+          path: '/Patient/Med/Rc',
+          message: expect.stringContaining('Erdbeeren'),
+        },
+      ]),
+    );
+  });
+
+  it('captures the printed Bemerkung verbatim into Rmk (never re-spelled)', () => {
+    // The probe reference says `begeistert!`; the parser must keep whatever the
+    // page prints. This test pins the capture, not the spelling.
+    const { value } = expectSuccess(
+      parsePrescriptionText(
+        [
+          'Peter Muster',
+          '01.11.1943 (M)',
+          '2, Seidenhofstrasse, Altstadt, 6002 Luzern',
+          'Ausstellungsdatum: 29.10.2026 09:42',
+          germanHeader,
+          'Ramipril 5 mg | 1 | - | - | - | Stück | 01.09.2026 | - | morgens',
+          'Bemerkung :',
+          'begeistert!',
+          'Zweite Zeile',
+          'Peter Muster (01.11.1943)  eMediplan by HCI Solutions AG(V1.0)  Seite 1 von 1',
+        ].join('\n'),
+      ),
+    );
+
+    expect(value.Rmk).toBe('begeistert!\nZweite Zeile');
+    expect(value.Dt).toBe('2026-10-29T09:42:00+01:00');
+  });
+
+  it('bounds the captured remark and strips control characters per line', () => {
+    const noisy = `${'x'.repeat(2000)}\u0000\u0007`;
+    const { value } = expectSuccess(
+      parsePrescriptionText(
+        [
+          'Peter Muster',
+          '01.11.1943 (M)',
+          '2, Seidenhofstrasse, Altstadt, 6002 Luzern',
+          'Ausstellungsdatum: 29.10.2026 09:42',
+          germanHeader,
+          'Ramipril 5 mg | 1 | - | - | - | Stück | 01.09.2026 | - | morgens',
+          'Bemerkung :',
+          noisy,
+          'tail beyond the clip bound',
+        ].join('\n'),
+      ),
+    );
+
+    expect(value.Rmk).toHaveLength(1000);
+    expect(value.Rmk).not.toContain('\u0000');
+    expect(value.Rmk).not.toContain('\u0007');
+    expect(value.Rmk?.endsWith('tail beyond the clip bound')).toBe(false);
+  });
+
+  it('keeps a date-only issue date as a date and computes CEST for a summer time', () => {
+    const dateOnly = expectSuccess(
+      parsePrescriptionText(
+        medicalText([]).replace('Ausstellungsdatum: 29.10.2026 09:42', 'Ausstellungsdatum: 29.10.2026'),
+      ),
+    );
+    const summer = expectSuccess(
+      parsePrescriptionText(
+        medicalText([]).replace('29.10.2026 09:42', '15.07.2026 09:42'),
+      ),
+    );
+
+    expect(dateOnly.value.Dt).toBe('2026-10-29');
+    expect(summer.value.Dt).toBe('2026-07-15T09:42:00+02:00');
+  });
+
+  it('resolves the Swiss DST boundaries with the two-candidate rule', () => {
+    // Offline oracle: Node's Intl.DateTimeFormat with `Europe/Zurich` reports
+    // the real Swiss offset for a UTC instant. The expected values below are
+    // derived from that oracle, not from the parser's own formula.
+    const zurichOffset = (instant: string): string => {
+      const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Europe/Zurich',
+        timeZoneName: 'longOffset',
+      }).formatToParts(new Date(instant));
+      return parts.find((part) => part.type === 'timeZoneName')?.value ?? '';
+    };
+    const parseAt = (issueDate: string): string => {
+      const { value } = expectSuccess(
+        parsePrescriptionText(
+          paperText(
+            ['Ramipril 5 mg | 1 | - | - | - | Tablet | 01.09.2026 | - | | | Dr. med. A Muster'],
+            DEFAULT_HEADER,
+            issueDate,
+          ),
+        ),
+      );
+      return value.Dt;
+    };
+
+    // Last Sunday of March 2026 (29.03.), 01:30 local is still the CET window
+    // before the 02:00 → 03:00 jump. Oracle: 00:30Z is GMT+01:00.
+    expect(zurichOffset('2026-03-29T00:30:00Z')).toBe('GMT+01:00');
+    expect(parseAt('29.03.2026 01:30')).toBe('2026-03-29T01:30:00+01:00');
+
+    // Spring gap: 02:30 local does not exist; the historical convention keeps
+    // the wall-time-as-UTC classification (+02:00).
+    expect(parseAt('29.03.2026 02:30')).toBe('2026-03-29T02:30:00+02:00');
+
+    // Autumn overlap: last Sunday of October 2026 (25.10.), 02:30 local exists
+    // twice and resolves deterministically to CET. Oracle: 01:30Z is GMT+01:00.
+    expect(zurichOffset('2026-10-25T01:30:00Z')).toBe('GMT+01:00');
+    expect(parseAt('25.10.2026 02:30')).toBe('2026-10-25T02:30:00+01:00');
+
+    // 01:30 local on the same day is still CEST. Oracle: 23:30Z (24.10.) is
+    // GMT+02:00.
+    expect(zurichOffset('2026-10-24T23:30:00Z')).toBe('GMT+02:00');
+    expect(parseAt('25.10.2026 01:30')).toBe('2026-10-25T01:30:00+02:00');
+  });
+
+  it('detects German from the printed vocabulary and leaves unsupported languages warned', () => {
+    const german = expectSuccess(
+      parsePrescriptionText(medicalText(['Körpergrösse / Gewicht: 180 cm / 81 kg'])),
+    );
+    // A French layout parses through the shared title vocabulary but has no
+    // language mapping yet: the placeholder is kept and a warning explains it.
+    const french = expectSuccess(
+      parsePrescriptionText(
+        [
+          'Prénom: Erika',
+          'Nom: Muster',
+          'Date de naissance: 05.05.1980 (F)',
+          "Date d'émission: 01.09.2026",
+          'Médicament | Matin | Midi | Soir | Nuit | Quantité | Du | Au | Instructions | Raison | Prescrit par',
+          'Ramipril 5 mg | 1 | - | - | - | Comprimé | 01.09.2026 | - | | | Dr. med. A Muster',
+        ].join('\n'),
+      ),
+    );
+
+    expect(german.value.Patient.Lng).toBe('de');
+    expect(french.value.Patient.Lng).toBe('');
+    expect(french.warnings).toEqual(
+      expect.arrayContaining([
+        {
+          code: 'unknown-field',
+          path: '/Patient/Lng',
+          message: expect.stringContaining('i18n'),
+        },
+      ]),
+    );
+  });
+});
+
+describe('link-annotation identity (phase 4)', () => {
+  /**
+   * Synthetic geometry of the five medication rows of the real German fixture,
+   * in document order: VALIUM, SORTIS, CO-DIOVAN, PANADOL, Essigwickel. The
+   * values are arbitrary but internally consistent: the mapping only compares
+   * rects with these bands.
+   */
+  const ROWS: readonly PdfRowGeometry[] = [
+    { page: 1, top: 440, bottom: 420, medicationLeft: 40, medicationRight: 120 },
+    { page: 1, top: 400, bottom: 380, medicationLeft: 40, medicationRight: 120 },
+    { page: 1, top: 360, bottom: 340, medicationLeft: 40, medicationRight: 120 },
+    { page: 1, top: 320, bottom: 300, medicationLeft: 40, medicationRight: 120 },
+    { page: 1, top: 280, bottom: 260, medicationLeft: 40, medicationRight: 120 },
+  ];
+
+  /** A link annotation centered on the medication cell of one row. */
+  function annotation(rowIndex: number, productId: string): PdfLinkAnnotation {
+    const row = ROWS[rowIndex];
+    if (row === undefined) {
+      throw new Error(`No synthetic row ${rowIndex}`);
+    }
+    return {
+      page: row.page,
+      rect: [row.medicationLeft + 1, row.bottom + 2, row.medicationLeft + 60, row.top - 2],
+      productId,
+    };
+  }
+
+  it('maps an annotation to the row its rect overlaps', () => {
+    const ids = mapAnnotationsToRows(ROWS, [annotation(3, '1159424')]);
+
+    expect(ids).toEqual([undefined, undefined, undefined, '1159424', undefined]);
+  });
+
+  it('maps several annotations to their own rows without cross-mapping', () => {
+    const ids = mapAnnotationsToRows(ROWS, [
+      annotation(0, '23846'),
+      annotation(1, '58356'),
+      annotation(2, '93139'),
+    ]);
+
+    expect(ids).toEqual(['23846', '58356', '93139', undefined, undefined]);
+  });
+
+  it('rejects an ambiguous annotation that overlaps two row bands', () => {
+    const overlapping: readonly PdfRowGeometry[] = [
+      { page: 1, top: 440, bottom: 420, medicationLeft: 40, medicationRight: 120 },
+      { page: 1, top: 430, bottom: 410, medicationLeft: 40, medicationRight: 120 },
+    ];
+
+    const ids = mapAnnotationsToRows(overlapping, [
+      { page: 1, rect: [50, 415, 100, 425], productId: '58356' },
+    ]);
+
+    // Ambiguous: never assigned to the nearest row.
+    expect(ids).toEqual([undefined, undefined]);
+  });
+
+  it('deduplicates the same id and rejects two different ids on one row', () => {
+    const duplicated = mapAnnotationsToRows(ROWS, [
+      annotation(3, '1159424'),
+      annotation(3, '1159424'),
+    ]);
+    const conflicting = mapAnnotationsToRows(ROWS, [
+      annotation(3, '111111'),
+      annotation(3, '222222'),
+    ]);
+
+    expect(duplicated[3]).toBe('1159424');
+    expect(conflicting[3]).toBeUndefined();
+  });
+
+  it('ignores annotations on another page or in another column', () => {
+    const otherPage = mapAnnotationsToRows(ROWS, [
+      { page: 2, rect: annotation(3, 'x').rect, productId: '1159424' },
+    ]);
+    const otherColumn = mapAnnotationsToRows(ROWS, [
+      { page: 1, rect: [200, 302, 240, 318], productId: '1159424' },
+    ]);
+
+    expect(otherPage.every((id) => id === undefined)).toBe(true);
+    expect(otherColumn[3]).toBeUndefined();
+  });
+
+  it('applies IdType 4 only to the matching row and keeps the text fallback elsewhere', () => {
+    const { value } = expectSuccess(
+      parsePrescriptionText(realGermanFixture, {
+        annotations: [annotation(3, '1159424')],
+        rows: ROWS,
+      }),
+    );
+
+    expect(value.Medicaments?.[3]).toMatchObject({ Id: '1159424', IdType: 4 });
+    expect(value.Medicaments?.[4]).toMatchObject({ Id: 'Essigwickel', IdType: 1 });
+    expect(value.Medicaments?.map((medicament) => medicament.IdType)).toEqual([
+      1, 1, 1, 4, 1,
+    ]);
+  });
+
+  it('drops every IdType-4 binding when geometry rows and medicaments disagree', () => {
+    // Six geometry rows for five parsed medicaments: a band that produced no
+    // medicament would shift every later binding, so the parser must fail
+    // closed instead of attaching an id to the wrong row.
+    const shiftedRows: readonly PdfRowGeometry[] = [
+      ...ROWS,
+      { page: 1, top: 240, bottom: 220, medicationLeft: 40, medicationRight: 120 },
+    ];
+    const { value, warnings } = expectSuccess(
+      parsePrescriptionText(realGermanFixture, {
+        annotations: [annotation(3, '1159424')],
+        rows: shiftedRows,
+      }),
+    );
+
+    expect(value.Medicaments?.every((medicament) => medicament.IdType !== 4)).toBe(true);
+    expect(value.Medicaments?.[3]).toMatchObject({ IdType: 1 });
+    expect(value.Medicaments?.[3]?.Id).toContain('PANADOL');
+    expect(warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'unknown-field',
+          path: '/Medicaments',
+          message: expect.stringContaining('IdType 4'),
+        }),
+      ]),
+    );
+  });
+
+  it('maps every annotated real row in the synthetic variant, without leaking', () => {
+    const { value } = expectSuccess(
+      parsePrescriptionText(realGermanFixture, {
+        annotations: [
+          annotation(0, '23846'),
+          annotation(1, '58356'),
+          annotation(2, '93139'),
+          annotation(3, '1159424'),
+        ],
+        rows: ROWS,
+      }),
+    );
+
+    expect(value.Medicaments?.map((medicament) => [medicament.Id, medicament.IdType])).toEqual([
+      ['23846', 4],
+      ['58356', 4],
+      ['93139', 4],
+      ['1159424', 4],
+      ['Essigwickel', 1],
+    ]);
+  });
+
+  it('keeps the printed-text id when no annotation context is supplied', () => {
+    const { value } = expectSuccess(parsePrescriptionText(realGermanFixture));
+
+    expect(value.Medicaments?.[3]?.IdType).toBe(1);
+    expect(value.Medicaments?.[3]?.Id).toContain('PANADOL');
+    expect(value.Medicaments?.[4]).toMatchObject({ Id: 'Essigwickel', IdType: 1 });
   });
 });

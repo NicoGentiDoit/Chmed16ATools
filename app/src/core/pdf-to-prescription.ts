@@ -16,8 +16,13 @@
  *    `ocr-low-confidence` warning. Otherwise the *tabulated* text of
  *    `extractPdfText` is used when the item geometry produced a medication
  *    table, and the flat text is the fallback.
+ *    When the tabulated text is used, the extracted link annotations and row
+ *    geometry are passed to the parser as an optional `PdfAnnotationContext`
+ *    (Swissmedic `IdType: 4` ids). The OCR fallback has no geometry and
+ *    therefore no annotations: its ids stay text-based.
  * 4. `parseText` — `{ ok: false, errors }` becomes `stage: 'parse'`.
- * 5. `validate` — the parsed object is checked against the rev-3 Rx schema;
+ * 5. `validate` — the parsed object is checked against the Medication Plan
+ *    schema (`MedType: 1`) that `validateObject` derives from the document;
  *    `{ ok: false }` becomes `stage: 'validate'` and carries the rejected
  *    prescription as a `draft` (review only: nothing is encoded from it).
  * 6. `encode` — `jsonToChmed`; `{ ok: false }` becomes `stage: 'encode'`.
@@ -69,8 +74,12 @@ import type { PdfExtractError, PdfExtractResult } from './pdf-extract';
 import { RENDER_FAILED_MESSAGE, renderPageToImageData } from './pdf-render';
 import type { PdfRenderError } from './pdf-render';
 import { parsePrescriptionText } from './prescription-parse';
-import type { ParseError, PrescriptionParseResult } from './prescription-parse';
-import type { MedicationRx } from './types';
+import type {
+  ParseError,
+  PdfAnnotationContext,
+  PrescriptionParseResult,
+} from './prescription-parse';
+import type { MedicationMp } from './types';
 import { validateObject } from './validate';
 import type {
   ValidationContext,
@@ -117,7 +126,11 @@ export interface PdfToPrescriptionDeps {
   ) => Promise<PdfPagesRenderResult>;
   /** Recognises one or more pages; `runOcr` already joins them with `combineOcrPages`. */
   readonly ocr: (images: readonly OcrImage[]) => Promise<OcrResult>;
-  readonly parseText: (text: string) => PrescriptionParseResult;
+  readonly parseText: (
+    text: string,
+    context?: PdfAnnotationContext,
+    fallbackText?: string,
+  ) => PrescriptionParseResult;
   readonly validate: (object: unknown, context?: ValidationContext) => ValidationResult;
   readonly encode: (input: string | object) => EncodeResult;
 }
@@ -126,7 +139,8 @@ export interface PdfToPrescriptionSuccess {
   readonly ok: true;
   /** Text that was parsed (text layer, or the OCR pages joined). */
   readonly text: string;
-  readonly prescription: MedicationRx;
+  /** The parsed Medication Plan (`MedType: 1`). */
+  readonly prescription: MedicationMp;
   /** `JSON.stringify(prescription, null, 2)`. */
   readonly json: string;
   readonly chmed: string;
@@ -144,7 +158,7 @@ export interface PdfToPrescriptionSuccess {
  * it (fix round 3). `json` is `JSON.stringify(prescription, null, 2)`.
  */
 export interface PdfToPrescriptionDraft {
-  readonly prescription: MedicationRx;
+  readonly prescription: MedicationMp;
   readonly json: string;
 }
 
@@ -371,6 +385,14 @@ export async function pdfToPrescription(
     stage = 'ocr';
     let text = extracted.value.text;
     let confidence: PdfToPrescriptionConfidence = 'high';
+    let annotationContext: PdfAnnotationContext | undefined;
+    /**
+     * The flat text layer, forwarded when the tabulated rendering is parsed.
+     * The tabulator stops at the `Bemerkung :` stop row to keep the medication
+     * table clean, so the remark after the last table only exists here; the
+     * parser uses it for `Rmk` only.
+     */
+    let fallbackText: string | undefined;
     const extraWarnings: PdfToPrescriptionWarning[] = [];
 
     if (!extracted.value.hasTextLayer || text.trim() === '') {
@@ -405,19 +427,41 @@ export async function pdfToPrescription(
       // printed table; the flat text is only a fallback (older extractors, or
       // a page whose geometry yielded no medication header).
       text = extracted.value.tabulatedText;
+      // The tabulator stops at the `Bemerkung :` stop row by design, so the
+      // printed remark after the last table exists only in the flat rendering.
+      // Hand that rendering to the parser as a `Rmk`-only fallback.
+      fallbackText = extracted.value.text;
+      // Link annotations belong to the tabulated geometry only. Pairing them
+      // needs both the page-space rects and the row bands; without the
+      // tabulation the parser keeps printed-text ids. The OCR branch above
+      // leaves the context unset by construction (no text layer → no rows).
+      const { annotations, medicationRows } = extracted.value;
+      if (
+        annotations !== undefined &&
+        annotations.length > 0 &&
+        medicationRows !== undefined &&
+        medicationRows.length > 0
+      ) {
+        annotationContext = { annotations, rows: medicationRows };
+      }
     }
 
     stage = 'parse';
-    const parsed = stages.parseText(text);
+    const parsed =
+      fallbackText === undefined
+        ? annotationContext === undefined
+          ? stages.parseText(text)
+          : stages.parseText(text, annotationContext)
+        : stages.parseText(text, annotationContext, fallbackText);
     if (!parsed.ok) {
       return { ok: false, stage: 'parse', errors: parsed.errors };
     }
 
     stage = 'validate';
-    const validation = stages.validate(parsed.value, {
-      medType: 3,
-      rev: parsed.value.rev ?? 3,
-    });
+    // The PDF path produces a Medication Plan (`MedType: 1`). The context is
+    // derived from the parsed document, so no Rx `medType: 3`/`rev` is passed:
+    // `validateObject` selects `medicationMpSchema`.
+    const validation = stages.validate(parsed.value);
     if (!validation.ok) {
       // The rejected prescription is still useful for review: it is returned as
       // a clearly marked draft, and the encoder is never called (fix round 3).

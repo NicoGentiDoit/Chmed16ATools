@@ -134,6 +134,115 @@ export const STRINGS = {
   iconCameraLabel: 'Camera',
   iconUploadLabel: 'Upload file',
   iconQrLabel: 'QR code',
+
+  /* ── workbench shell: brand, skip link, home (appended in phase 2) ── */
+  workbenchSubtitle: 'Converti e valida piani terapeutici svizzeri',
+  skipToContent: 'Skip to content',
+  versionBadge: 'v{version}',
+  homeHeading: 'Choose a flow',
+  homeCardJsonDescription:
+    'Paste or type a CHMED16A JSON document, validate it and encode it into a CHMED16A string with its QR code.',
+  homeCardJsonBadge: 'JSON',
+  homeCardChmedDescription:
+    'Decode a compressed or uncompressed CHMED16A string, or scan its QR code, back into readable JSON.',
+  homeCardChmedBadge: 'CHMED16A',
+  homeCardPdfDescription:
+    'Extract an ePrescription from a printed eMediplan PDF. Scanned pages are recognized offline.',
+  homeCardPdfBadge: 'PDF',
+  openFlowLabel: 'Open {flow}',
+
+  /* ── phase 4b: three-level findings, distinct PDF output clears (append-only) ── */
+  infoLabel: 'Info',
+  clearJsonOutputAccessibleName: 'Clear the extracted JSON output',
+  clearChmedOutputAccessibleName: 'Clear the encoded CHMED16A string',
+
+  /* ── phase 5: JSON input drop zone (append-only) ── */
+  jsonInputDragHint: 'You can also drop a .json or .txt file here; its text replaces the field content.',
+  dropFileUnsupported: '"{name}" is not a .json or .txt text file. Nothing was loaded.',
+  dropFileTooLarge: '"{name}" is larger than 1 MiB. Nothing was loaded.',
+  dropMultipleFiles: 'Drop one file at a time. "{name}" was not loaded.',
+  dropReadFailed: 'The dropped file could not be read. Nothing was loaded.',
+
+  /* ── phase 6: CHMED16A → JSON structured view (append-only) ── */
+  jsonViewGroupLabel: 'Output view',
+  jsonViewStructured: 'Structured',
+  jsonViewRaw: 'Raw JSON',
+  jsonDocumentSection: 'Document',
+  jsonSectionItem: '{count} item',
+  jsonSectionItems: '{count} items',
+  jsonSectionKey: '{count} key',
+  jsonSectionKeys: '{count} keys',
+  jsonSectionEmpty: 'empty',
+  jsonTypeString: 'string',
+  jsonTypeNumber: 'number',
+  jsonTypeBoolean: 'boolean',
+  jsonTypeNull: 'null',
+  jsonTypeUnknown: 'value',
+
+  /* ── phase 7a: PDF steps + first-page preview (append-only) ── */
+  pdfStepIndicatorLabel: 'PDF processing steps',
+  pdfStepOf: 'Step {current} of 3',
+  pdfStep1Label: 'Upload',
+  pdfStep2Label: 'Review',
+  pdfStep3Label: 'Export',
+  pdfPreviewHeading: 'First page preview',
+  pdfPreviewAriaLabel: 'First page of the selected PDF',
+  pdfPreviewFailed: 'The first page could not be previewed. Processing is unaffected.',
+
+  /* ── phase 7b: read-only review table (append-only) ── */
+  pdfReviewCaption: 'Review extracted {section}',
+  pdfReviewFieldHeader: 'Field',
+  pdfReviewValueHeader: 'Value',
+  pdfReviewStatusHeader: 'Status',
+  pdfReviewPositionHeader: 'Pos',
+  pdfReviewIdHeader: 'Id / GTIN',
+  pdfReviewUnitHeader: 'Unit',
+  pdfReviewInstructionsHeader: 'Instructions',
+  statusRecognized: 'Recognized',
+  statusToVerify: 'To verify',
+  statusAbsent: 'Absent',
+  reviewValuePlaceholder: '—',
+
+  /* ── phase 7c: inline editing of the review table (append-only) ── */
+  reviewEditableHint:
+    'Edit a value, then leave the field: the prescription is checked again and the CHMED16A output follows its result.',
+  reviewCellAriaLabel: 'Edit {field} ({row})',
+  reviewMedicamentRow: 'Medicament {position}',
+  reviewInvalidEdit: 'The edited prescription could not be checked, so nothing was encoded.',
+
+  /* ── phase 7d: export recap at step 3 (append-only) ── */
+  exportRecapHeading: 'Export summary',
+  recapPatientLabel: 'Patient',
+  recapPrescriberLabel: 'Prescriber / Organisation',
+  recapMedicamentsLabel: 'Medicaments',
+  recapExtractionLabel: 'Extraction',
+  recapEditsLabel: 'Edits',
+  recapPatientBorn: '{name} · born {date}',
+  recapEdited: 'Edited',
+  recapValid: 'Valid ({warnings} warnings)',
+  recapBlocked: 'Blocked: {errors} errors, {warnings} warnings',
+
+  /* ── phase 8a: guided tasks, required counter, recap shortcuts (append-only) ── */
+  taskHeading: 'Required actions',
+  taskAddRequired: 'Add {field}',
+  taskGoToField: 'Go to {field} field',
+  taskFieldFallback: 'field',
+  technicalDetailsLabel: 'Technical details',
+  reviewRequiredCount: '{done} of {total} required fields completed',
+  reviewRequiredBlocked: 'Export still blocked: {n} blocking issues',
+  recapFixField: 'Fix {section} data',
+
+  /* ── phase 8b: advisory inline hints under editable fields (append-only) ── */
+  advisoryGlnHint: 'GLN must be a 13-digit number — the validator will confirm on save.',
+  advisoryDateFormatHint: 'Use the YYYY-MM-DD format.',
+  advisoryRequiredHint: 'Required — the validator lists this under Required actions.',
+
+  /* ── phase 8c: structured JSON missing-required marks (append-only) ── */
+  jsonMissingRequired: 'missing required properties',
+
+  /* ── phase 8d: honest section-level labels for unrendered required keys (append-only) ── */
+  taskGoToSectionData: 'Go to {section} data',
+  taskAddSectionData: 'Add {section} data',
 } as const;
 
 /** Every key of {@link STRINGS}; panels may only request these. */

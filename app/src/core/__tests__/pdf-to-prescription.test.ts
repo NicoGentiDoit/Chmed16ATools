@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import expectedReferenceRaw from './fixtures/emediplan-paper-rx-expected-mp.json?raw';
+import realGerman20261029Fixture from './fixtures/emediplan-paper-rx-real-de-20261029.txt?raw';
 import realGermanOneDoctorFixture from './fixtures/emediplan-paper-rx-real-de-one-doctor.txt?raw';
 import realGermanFixture from './fixtures/emediplan-paper-rx-real-de.txt?raw';
+import { chmedToJson } from '../decode';
 import { jsonToChmed } from '../encode';
 import type { PdfExtractError } from '../pdf-extract';
 import { MAX_OCR_PAGES, pdfToPrescription } from '../pdf-to-prescription';
@@ -12,7 +15,8 @@ import type {
   PdfToPrescriptionSuccess,
 } from '../pdf-to-prescription';
 import { parsePrescriptionText } from '../prescription-parse';
-import type { MedicationRx } from '../types';
+import type { PdfLinkAnnotation, PdfRowGeometry } from '../prescription-parse';
+import type { MedicamentMp, MedicationMp } from '../types';
 import type { ValidationWarning } from '../validate';
 import { validateObject } from '../validate';
 
@@ -54,17 +58,21 @@ const OCR_PAPER_TEXT = [
  */
 const REAL_GERMAN_TEXT = realGermanFixture;
 
-/** Revision-3 Rx that the real validator and encoder accept without findings. */
-const PRESCRIPTION: MedicationRx = {
-  rev: 3,
-  MedType: 3,
+/** Medication Plan (`MedType: 1`) that the real validator and encoder accept. */
+const PRESCRIPTION: MedicationMp = {
+  MedType: 1,
   Id: '26d3dff7-ab05-4737-a49c-5eccd33595f6',
   Auth: '7601003178999',
   Dt: '2026-04-01T10:00:00+02:00',
-  Patient: { FName: 'Maxima', LName: 'Matter', BDt: '1981-01-12' },
-  Medicaments: [{ Id: '971867', IdType: 3, Pos: [{ D: [1, 0, 0, 0] }], IndC: '12345.67' }],
-  HcPerson: { Gln: '7601003178999', FName: 'Anna', LName: 'Arzt' },
-  HcOrg: { Name: 'Praxis', Street: 'Hauptstrasse 1', Zip: '3000', City: 'Bern' },
+  Patient: { FName: 'Maxima', LName: 'Matter', BDt: '1981-01-12', Lng: 'de' },
+  Medicaments: [
+    {
+      Id: '971867',
+      IdType: 3,
+      Unit: 'Stück',
+      Pos: [{ DtFrom: '2026-04-01', D: [1, 0, 0, 0] }],
+    },
+  ],
 };
 
 function pdfBytes(): Uint8Array {
@@ -148,13 +156,15 @@ describe('text-layer path', () => {
     expect(ocr).not.toHaveBeenCalled();
   });
 
-  it('validates against the Rx context and passes the parsed object to the encoder', async () => {
+  it('validates against the derived Medication Plan context and passes the object to the encoder', async () => {
     const validate = vi.fn(() => ({ ok: true, errors: [], warnings: [] }));
     const encode = vi.fn(() => ({ ok: true as const, chmed: 'CHMED16A1FAKE', warnings: [] }));
 
     await pdfToPrescription(pdfBytes(), makeDeps({ validate, encode }));
 
-    expect(validate).toHaveBeenCalledWith(PRESCRIPTION, { medType: 3, rev: 3 });
+    // No Rx `medType: 3`/`rev` override: the validator derives `MedType: 1`
+    // (MP) from the parsed document.
+    expect(validate).toHaveBeenCalledWith(PRESCRIPTION);
     expect(encode).toHaveBeenCalledWith(PRESCRIPTION);
   });
 
@@ -242,6 +252,7 @@ describe('OCR fallback', () => {
       FName: 'Erika',
       LName: 'Muster',
       BDt: '1980-05-05',
+      Lng: 'en',
       Gender: 2,
     });
     expect(result.prescription.Medicaments).toEqual([
@@ -250,7 +261,10 @@ describe('OCR fallback', () => {
         IdType: 1,
         Unit: 'Tablet',
         AppInstr: 'After a meal',
-        Pos: [{ DtTo: '2026-09-30', D: [1, 0, 0, 0] }],
+        TkgRsn: 'Hypertension',
+        PrscbBy: 'Dr. med. Anna Muster',
+        Pos: [{ DtFrom: '2026-09-01', DtTo: '2026-09-30', D: [1, 0, 0, 0] }],
+        Roa: 'PO',
       },
     ]);
     expect(result.warnings.map((warning) => warning.code)).toContain('ocr-low-confidence');
@@ -335,10 +349,10 @@ describe('typed failures', () => {
   it('carries the rejected prescription as a draft on a validate failure', async () => {
     const validationErrors = [
       {
-        instancePath: '',
+        instancePath: '/Patient',
         keyword: 'required',
-        message: "must have required property 'HcPerson'",
-        params: { missingProperty: 'HcPerson' },
+        message: "must have required property 'Lng'",
+        params: { missingProperty: 'Lng' },
       },
     ];
 
@@ -602,7 +616,11 @@ describe('tabulated text selection', () => {
       ),
     );
 
-    expect(parseText).toHaveBeenCalledWith(REAL_GERMAN_TEXT);
+    expect(parseText).toHaveBeenCalledWith(
+      REAL_GERMAN_TEXT,
+      undefined,
+      'flat text that must not be parsed',
+    );
     expect(result.text).toBe(REAL_GERMAN_TEXT);
     expect(result.prescription.Patient.FName).toBe('Peter');
     expect(result.prescription.Medicaments).toHaveLength(5);
@@ -650,13 +668,113 @@ describe('tabulated text selection', () => {
     expect(result.text).toBe(OCR_PAPER_TEXT);
     expect(result.confidence).toBe('low');
   });
+
+  /** Row bands of the five real medication rows, in document order. */
+  const ANNOTATION_ROWS: readonly PdfRowGeometry[] = [
+    { page: 1, top: 440, bottom: 420, medicationLeft: 40, medicationRight: 120 },
+    { page: 1, top: 400, bottom: 380, medicationLeft: 40, medicationRight: 120 },
+    { page: 1, top: 360, bottom: 340, medicationLeft: 40, medicationRight: 120 },
+    { page: 1, top: 320, bottom: 300, medicationLeft: 40, medicationRight: 120 },
+    { page: 1, top: 280, bottom: 260, medicationLeft: 40, medicationRight: 120 },
+  ];
+
+  function productAnnotation(
+    rowIndex: number,
+    productId: string,
+  ): PdfLinkAnnotation {
+    const row = ANNOTATION_ROWS[rowIndex];
+    if (row === undefined) {
+      throw new Error(`No synthetic row ${rowIndex}`);
+    }
+    return {
+      page: row.page,
+      rect: [row.medicationLeft + 1, row.bottom + 2, row.medicationLeft + 60, row.top - 2],
+      productId,
+    };
+  }
+
+  it('threads link annotations to the parser and emits Swissmedic ids', async () => {
+    const annotations: readonly PdfLinkAnnotation[] = [
+      productAnnotation(3, '1159424'),
+    ];
+    const parseText = vi.fn(parsePrescriptionText);
+
+    const result = expectSuccess(
+      await pdfToPrescription(
+        pdfBytes(),
+        makeDeps({
+          extractText: async () => ({
+            ok: true,
+            value: {
+              text: 'flat text that must not be parsed',
+              tabulatedText: REAL_GERMAN_TEXT,
+              pageCount: 1,
+              hasTextLayer: true,
+              annotations,
+              medicationRows: ANNOTATION_ROWS,
+            },
+          }),
+          parseText,
+        }),
+      ),
+    );
+
+    expect(parseText).toHaveBeenCalledWith(
+      REAL_GERMAN_TEXT,
+      {
+        annotations,
+        rows: ANNOTATION_ROWS,
+      },
+      'flat text that must not be parsed',
+    );
+    expect(result.prescription.Medicaments?.[3]).toMatchObject({
+      Id: '1159424',
+      IdType: 4,
+    });
+    expect(result.prescription.Medicaments?.[4]).toMatchObject({
+      Id: 'Essigwickel',
+      IdType: 1,
+    });
+  });
+
+  it('never threads annotations into the OCR path', async () => {
+    const parseText = vi.fn(() => ({
+      ok: true as const,
+      value: PRESCRIPTION,
+      warnings: [],
+    }));
+
+    const result = expectSuccess(
+      await pdfToPrescription(
+        pdfBytes(),
+        scannedDeps({
+          extractText: async () => ({
+            ok: true,
+            value: {
+              text: '  \n\f\t ',
+              tabulatedText: REAL_GERMAN_TEXT,
+              pageCount: 1,
+              hasTextLayer: false,
+              annotations: [productAnnotation(3, '1159424')],
+              medicationRows: ANNOTATION_ROWS,
+            },
+          }),
+          parseText,
+        }),
+      ),
+    );
+
+    expect(result.confidence).toBe('low');
+    // One argument: no geometry context reaches the parser without a text layer.
+    expect(parseText).toHaveBeenCalledWith(OCR_PAPER_TEXT);
+  });
 });
 
-describe('real German sample with one consistent prescriber (fix round 3)', () => {
+describe('real German sample on the Medication Plan path', () => {
   /** The committed real sample with its per-row prescribers unified. */
   const ONE_DOCTOR_TEXT = realGermanOneDoctorFixture;
 
-  it('validates the inferred author and encodes a real CHMED16A1 string', async () => {
+  it('validates the real sample and encodes a real CHMED16A1 string', async () => {
     const result = expectSuccess(
       await pdfToPrescription(
         pdfBytes(),
@@ -678,19 +796,41 @@ describe('real German sample with one consistent prescriber (fix round 3)', () =
       ),
     );
 
-    expect(result.prescription.HcPerson).toEqual({
-      Gln: '7600000000000',
-      FName: 'Example',
-      LName: 'Karl',
-    });
+    // MP keeps only the printed GLN as `Auth`; there is no provider identity.
+    expect(result.prescription.Auth).toBe('7600000000000');
+    expect(result.prescription).not.toHaveProperty('HcPerson');
+    expect(result.prescription).not.toHaveProperty('HcOrg');
     expect(result.prescription.Medicaments).toHaveLength(5);
+    // Phase 2 per-row fidelity survives the whole pipeline.
+    expect(result.prescription.Medicaments?.[1]).toMatchObject({
+      Unit: 'mg',
+      TkgRsn: 'Cholesterinsenker',
+      PrscbBy: 'Dr. Example Karl, Wängi',
+      Roa: 'PO',
+      Pos: [{ DtFrom: '2016-03-01', D: [0, 0, 1, 0] }],
+    });
+    expect(result.prescription.Medicaments?.[3]).toMatchObject({
+      Unit: 'Stk',
+      AutoMed: 1,
+      Pos: [{ DtFrom: '2016-09-09', InRes: 1, D: [0, 0, 0, 0] }],
+    });
+    expect(result.prescription.Medicaments?.[4]).toMatchObject({
+      Unit: '-',
+      TkgRsn: 'Fieber',
+      AutoMed: 1,
+    });
+    expect(result.prescription.Medicaments?.[4]).not.toHaveProperty('Roa');
     expect(result.chmed.startsWith('CHMED16A1')).toBe(true);
     // The encoded string is the same document the UI shows as JSON.
     expect(JSON.parse(result.json)).toEqual(result.prescription);
   });
 
-  it('keeps the ambiguous real sample on the draft path instead of encoding', async () => {
-    const failure = expectFailure(
+  it('validates the ambiguous real sample too, because MP has no author requirement', async () => {
+    // Deliberate rewrite (plan 006 phase 1): the Rx revision-3 path needed a
+    // document author and kept this sample on the draft path. A Medication Plan
+    // has no `HcPerson`/`HcOrg`, so the same text now validates and encodes; the
+    // MP-required gaps (Lng/DtFrom/unit) are non-blocking warnings.
+    const result = expectSuccess(
       await pdfToPrescription(
         pdfBytes(),
         makeDeps({
@@ -709,16 +849,322 @@ describe('real German sample with one consistent prescriber (fix round 3)', () =
         }),
       ),
     );
-    if (failure.stage !== 'validate') {
-      throw new Error(`Expected a validate failure, got "${failure.stage}".`);
+
+    expect(result.prescription.MedType).toBe(1);
+    expect(result.prescription).not.toHaveProperty('HcPerson');
+    expect(result.prescription).not.toHaveProperty('HcOrg');
+    expect(result.prescription.Medicaments).toHaveLength(5);
+    // The SORTIS tabulation leak is normalized and the wrap has no invented
+    // route; both survive parser → validator → encoder.
+    expect(result.prescription.Medicaments?.[1]).toMatchObject({
+      Unit: 'mg',
+      Roa: 'PO',
+      PrscbBy: 'Dr. Arzt Hans, Münchenhausen',
+    });
+    expect(result.prescription.Medicaments?.[4]).toMatchObject({
+      Unit: '-',
+      AutoMed: 1,
+      Pos: [{ DtFrom: '2016-09-09', InRes: 1 }],
+    });
+    expect(result.prescription.Medicaments?.[4]).not.toHaveProperty('Roa');
+    expect(result.chmed.startsWith('CHMED16A1')).toBe(true);
+    expect(result.warnings.map((warning) => warning.path)).toEqual(
+      expect.arrayContaining(['/Medicaments/4/Roa', '/Patient/Med/Rc']),
+    );
+  });
+});
+
+/* ------------------------------------------------------------------------- *
+ * Phase 7 — ground truth for the real 20261029 PDF
+ *
+ * Fixture layout: the first part of
+ * `fixtures/emediplan-paper-rx-real-de-20261029.txt` is the verbatim
+ * `value.tabulatedText` of the probe for
+ * `20261029_eMediplan_Beispiel_de.pdf`; the line `===FLAT-TEXT===` separates it
+ * from the verbatim `value.text`. `splitGroundTruthFixture` is the only reader,
+ * so the two renderings stay distinct without a second fixture file.
+ *
+ * Reference object: `fixtures/emediplan-paper-rx-expected-mp.json` is the
+ * decoded reference document the user's other application produced from the
+ * same PDF. It is committed verbatim (pretty-printed) and is the expected
+ * object below.
+ *
+ * Comparison contract (fail-closed):
+ * - EXCLUDED by design: the root `Id` (the user's application generates its own
+ *   UUID) and gzip/encode metadata (they live in the CHMED envelope, not in the
+ *   object; the round-trip test covers the envelope).
+ * - EXPLICIT deltas, each asserted below rather than skipped:
+ *   (a) `Patient.Med.Rc`: the reference carries `{Id:4},{Id:5},{Id:2}` which have
+ *       no printed source in the PDF (never-invented policy);
+ *   (b) `Dt` seconds: the page prints minute precision, so the parser emits
+ *       `:00` where the reference records `:52`;
+ *   (c) the VALIUM unit (`ml` on both sides) and the other unit normalizations;
+ *   (d) `Rmk`: the tabulated text stops at the `Bemerkung :` stop row by design,
+ *       so the remark after the last table is read from the flat rendering the
+ *       pipeline now forwards to the parser. Re-extracting the target PDF
+ *       (2026-10-29 probe, pdfjs-dist 6.4.299 legacy text layer) shows the print
+ *       reads `begeistert!`. The earlier fixture flat part mis-quoted it as
+ *       `begefreit!` and was corrected to the print; the reference application
+ *       carries the same string. The reference-vs-produced relationship stays an
+ *       explicit assertion: the pipeline quotes the print verbatim and never
+ *       re-spells it.
+ * - Everything else (patient identity/measurements, every Medicament field
+ *   including `PrscbBy`/`TkgRsn`/`DtFrom`/`InRes`/`AutoMed`/`Roa`/`Unit`,
+ *   `MedType`, `Auth`) is compared with a deep equality; any unexpected
+ *   difference fails the suite.
+ *
+ * Medicaments are matched by `Id`, not array position: the reference sorts the
+ * rows differently from the PDF's printed order.
+ * ------------------------------------------------------------------------- */
+
+interface ExpectedRiskCategory {
+  Id: number;
+  R?: number[];
+}
+
+interface ExpectedReference {
+  Patient: {
+    FName: string;
+    LName: string;
+    BDt: string;
+    Gender: number;
+    Street: string;
+    Zip: string;
+    City: string;
+    Lng: string;
+    Med: {
+      Rc: ExpectedRiskCategory[];
+      Meas: Array<{ Type: number; Val: string; Unit: number }>;
+    };
+  };
+  Medicaments: MedicamentMp[];
+  MedType: number;
+  Id: string;
+  Auth: string;
+  Dt: string;
+  Rmk?: string;
+}
+
+const EXPECTED_REFERENCE = JSON.parse(expectedReferenceRaw) as ExpectedReference;
+
+function splitGroundTruthFixture(raw: string): { tabulated: string; flat: string } {
+  const parts = raw.split(/\r?\n===FLAT-TEXT===\r?\n/);
+  const [tabulated, flat] = parts;
+  if (tabulated === undefined || flat === undefined || parts.length !== 2) {
+    throw new Error('The 20261029 fixture must contain exactly one ===FLAT-TEXT=== separator.');
+  }
+  return { tabulated, flat };
+}
+
+function sortMedicaments(medicaments: readonly MedicamentMp[]): MedicamentMp[] {
+  return [...medicaments].sort((left, right) => left.Id.localeCompare(right.Id));
+}
+
+/** Everything compared after the explicit deltas above have been asserted. */
+function canonicalProduced(produced: MedicationMp): unknown {
+  const medical = produced.Patient.Med;
+  return {
+    Patient: {
+      ...produced.Patient,
+      Med: {
+        ...(medical ?? {}),
+        // (a) the three never-invented categories are asserted out above.
+        Rc: (medical?.Rc ?? []).filter((entry) => entry.Id === 1 || entry.Id === 6),
+      },
+    },
+    Medicaments: sortMedicaments(produced.Medicaments ?? []),
+    MedType: produced.MedType,
+    Auth: produced.Auth,
+  };
+}
+
+function canonicalExpected(expected: ExpectedReference): unknown {
+  return {
+    Patient: {
+      ...expected.Patient,
+      Med: {
+        ...expected.Patient.Med,
+        Rc: expected.Patient.Med.Rc.filter((entry) => entry.Id === 1 || entry.Id === 6),
+      },
+    },
+    Medicaments: sortMedicaments(expected.Medicaments),
+    MedType: expected.MedType,
+    Auth: expected.Auth,
+  };
+}
+
+describe('ground truth: 20261029 real Medication Plan PDF (phase 7)', () => {
+  /**
+   * Synthetic row bands, one per medicament row of the tabulated fixture, in
+   * document order (SORTIS, CO-DIOVAN, VALIUM, Essigwickel, PANADOL). They are
+   * internally consistent placeholders: the mapper only compares annotation
+   * rects with these bands, exactly as `pdf-extract.ts` would report the real
+   * geometry.
+   */
+  const TARGET_ROWS: readonly PdfRowGeometry[] = [
+    { page: 1, top: 440, bottom: 420, medicationLeft: 40, medicationRight: 120 },
+    { page: 1, top: 400, bottom: 380, medicationLeft: 40, medicationRight: 120 },
+    { page: 1, top: 360, bottom: 340, medicationLeft: 40, medicationRight: 120 },
+    { page: 1, top: 320, bottom: 300, medicationLeft: 40, medicationRight: 120 },
+    { page: 1, top: 280, bottom: 260, medicationLeft: 40, medicationRight: 120 },
+  ];
+
+  function targetAnnotation(rowIndex: number, productId: string): PdfLinkAnnotation {
+    const row = TARGET_ROWS[rowIndex];
+    if (row === undefined) {
+      throw new Error(`No synthetic row ${rowIndex}`);
+    }
+    return {
+      page: row.page,
+      rect: [row.medicationLeft + 1, row.bottom + 2, row.medicationLeft + 60, row.top - 2],
+      productId,
+    };
+  }
+
+  const TARGET_ANNOTATIONS: readonly PdfLinkAnnotation[] = [
+    targetAnnotation(0, '58356'), // SORTIS
+    targetAnnotation(1, '93139'), // CO-DIOVAN
+    targetAnnotation(2, '23846'), // VALIUM
+    targetAnnotation(4, '1159424'), // PANADOL; Essigwickel has no product link
+  ];
+
+  /** The printed `Bemerkung` paragraph of the flat probe text. */
+  function printedRemark(flat: string): string | undefined {
+    const lines = flat.split(/\r?\n/);
+    const index = lines.findIndex((line) => /^Bemerkung\s*:/i.test(line.trim()));
+    if (index < 0) {
+      return undefined;
+    }
+    const parts: string[] = [];
+    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+      const line = lines[cursor]?.trim() ?? '';
+      if (line === '') {
+        continue;
+      }
+      if (/^Peter Muster \(/.test(line)) {
+        break;
+      }
+      parts.push(line);
+    }
+    return parts.join('\n');
+  }
+
+  async function runTargetPipeline(): Promise<PdfToPrescriptionSuccess> {
+    const { tabulated, flat } = splitGroundTruthFixture(realGerman20261029Fixture);
+    return expectSuccess(
+      await pdfToPrescription(
+        pdfBytes(),
+        makeDeps({
+          extractText: async () => ({
+            ok: true,
+            value: {
+              text: flat,
+              tabulatedText: tabulated,
+              pageCount: 1,
+              hasTextLayer: true,
+              annotations: TARGET_ANNOTATIONS,
+              medicationRows: TARGET_ROWS,
+            },
+          }),
+          // Real parser, real validator and real encoder.
+          parseText: parsePrescriptionText,
+          validate: validateObject,
+          encode: jsonToChmed,
+        }),
+      ),
+    );
+  }
+
+  it('matches the decoded reference document field-by-field', async () => {
+    const { tabulated, flat } = splitGroundTruthFixture(realGerman20261029Fixture);
+    const result = await runTargetPipeline();
+    const produced = result.prescription;
+
+    // The pipeline really parsed the tabulated rendering, not the flat one.
+    expect(result.text).toBe(tabulated);
+
+    // Advisory parser findings are not failures; the validator stays clean.
+    expect(result.warnings.map((warning) => warning.path)).toEqual(
+      expect.arrayContaining(['/Medicaments/3/Roa', '/Patient/Med/Rc']),
+    );
+    expect(result.warnings.every((warning) => warning.code === 'unknown-field')).toBe(true);
+    const validation = validateObject(produced);
+    expect(validation.errors).toEqual([]);
+    expect(validation.warnings).toEqual([]);
+
+    // Root Id is excluded: the app generates a fresh v4 UUID.
+    expect(produced.Id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    expect(EXPECTED_REFERENCE.Id).toBe('807a63a8-25e6-45a3-8888-759388507c3c');
+
+    // (b) Dt: printed minute precision vs the reference's recorded seconds.
+    expect(produced.Dt).toBe('2026-10-29T09:42:00+01:00');
+    expect(EXPECTED_REFERENCE.Dt).toBe('2026-10-29T09:42:52+01:00');
+    expect(produced.Dt.slice(0, 16)).toBe(EXPECTED_REFERENCE.Dt.slice(0, 16));
+
+    // (a) Rc: the parser maps only the printed, unambiguous categories.
+    expect(produced.Patient.Med?.Rc).toEqual([
+      { Id: 1, R: [577] },
+      { Id: 6, R: [571] },
+    ]);
+    expect(EXPECTED_REFERENCE.Patient.Med.Rc).toHaveLength(5);
+    // The three extras have no printed source; they are the documented delta.
+    expect(EXPECTED_REFERENCE.Patient.Med.Rc).toEqual(
+      expect.arrayContaining([{ Id: 4 }, { Id: 5 }, { Id: 2 }]),
+    );
+    expect(
+      EXPECTED_REFERENCE.Patient.Med.Rc.filter((entry) => entry.Id !== 1 && entry.Id !== 6),
+    ).toEqual([{ Id: 4 }, { Id: 5 }, { Id: 2 }]);
+
+    // (c) Unit normalization: VALIUM keeps the printed `ml` on both sides.
+    const valiumProduced = produced.Medicaments?.find((medicament) => medicament.Id === '23846');
+    const valiumExpected = EXPECTED_REFERENCE.Medicaments.find(
+      (medicament) => medicament.Id === '23846',
+    );
+    expect(valiumProduced?.Unit).toBe('ml');
+    expect(valiumProduced?.Unit).toBe(valiumExpected?.Unit);
+
+    // (d) Rmk: the re-extraction (2026-10-29 probe, pdfjs-dist 6.4.299 legacy
+    // text layer) shows the print reads `begeistert!`. The earlier fixture flat
+    // part mis-quoted it; the fixture now quotes the print, and the pipeline
+    // forwards the flat rendering so the remark reaches `captureRemark`.
+    const printed = printedRemark(flat);
+    expect(printed).toBe('Der Patient ist vom Medikationsplan begeistert!');
+    // The produced remark is the printed remark, verbatim.
+    expect(produced.Rmk).toBe(printed);
+    // The reference-vs-produced delta is resolved, not skipped: the reference
+    // application carries the same string as the paper. This explicit equality
+    // fails if either side ever diverges; the pipeline never re-spells.
+    expect(produced.Rmk).toBe(EXPECTED_REFERENCE.Rmk);
+
+    // Every medicament is matched by id (the reference order differs) and every
+    // remaining field is compared fail-closed.
+    expect((produced.Medicaments ?? []).map((medicament) => medicament.Id).sort()).toEqual(
+      EXPECTED_REFERENCE.Medicaments.map((medicament) => medicament.Id).sort(),
+    );
+    expect(canonicalProduced(produced)).toEqual(canonicalExpected(EXPECTED_REFERENCE));
+  });
+
+  it('round-trips the committed reference through the CHMED encoder and decoder', () => {
+    // The reference itself must be a valid Medication Plan with no findings.
+    const validation = validateObject(EXPECTED_REFERENCE);
+    expect(validation.errors).toEqual([]);
+    expect(validation.warnings).toEqual([]);
+
+    const encoded = jsonToChmed(EXPECTED_REFERENCE);
+    if (!encoded.ok) {
+      throw new Error(`The reference document failed to encode: ${JSON.stringify(encoded.errors)}`);
+    }
+    expect(encoded.chmed.startsWith('CHMED16A1')).toBe(true);
+    expect(encoded.warnings).toEqual([]);
+
+    const decoded = chmedToJson(encoded.chmed);
+    if (!decoded.ok) {
+      throw new Error(`The encoded reference failed to decode: ${JSON.stringify(decoded.errors)}`);
     }
 
-    expect(failure.errors.map((error) => error.params)).toEqual([
-      { missingProperty: 'HcPerson' },
-      { missingProperty: 'HcOrg' },
-    ]);
-    // The draft is review material only; no CHMED string exists to leak.
-    expect(failure.draft?.prescription.HcPerson).toBeUndefined();
-    expect(JSON.parse(failure.draft?.json ?? '{}')).toEqual(failure.draft?.prescription);
+    // Modulo gzip metadata: only the payload JSON is compared, and it must be
+    // byte-identical to the compact serialization of the committed reference.
+    expect(decoded.jsonText).toBe(JSON.stringify(EXPECTED_REFERENCE));
+    expect(JSON.parse(decoded.jsonText)).toEqual(EXPECTED_REFERENCE);
   });
 });

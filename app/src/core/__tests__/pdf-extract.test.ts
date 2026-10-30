@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
-import { hasPdfMagic, hasTextLayer, normalizeTextItems, tabulateLayout } from '../pdf-extract';
+import {
+  collectLinkAnnotations,
+  hasPdfMagic,
+  hasTextLayer,
+  normalizeTextItems,
+  productIdFromUri,
+  tabulateLayout,
+} from '../pdf-extract';
 import type { PdfTextItemLike } from '../pdf-extract';
+import { mapAnnotationsToRows } from '../prescription-parse';
+import type { PdfLinkAnnotation, PdfRowGeometry } from '../prescription-parse';
 
 /** Positioned text item as pdfjs reports it (device space, `y` upwards). */
 function item(
@@ -464,6 +473,25 @@ describe('tabulateLayout', () => {
     expect(result.medicationRowCount).toBeGreaterThan(5);
   });
 
+  it('reports the row band and the first-column x band for annotation mapping', () => {
+    const result = tabulateLayout(measuredItems(REAL_PAGE));
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.medicationRows).toHaveLength(5);
+    // PANADOL is row 4 of the document and belongs to the drifted reserve
+    // header (`Medikament` x=39.9, `Morgen` x=205).
+    const panadol = result.medicationRows[3];
+    expect(panadol).toEqual({
+      top: 224.3,
+      bottom: 205.7,
+      medicationLeft: 39.9,
+      medicationRight: (39.9 + 205) / 2,
+    });
+  });
+
   it('does not throw on hostile item shapes', () => {
     const hostile: PdfTextItemLike[] = [
       { str: 'x'.repeat(10_000), transform: [0, 0, 0, 0, Number.NaN, Number.NaN] },
@@ -475,5 +503,146 @@ describe('tabulateLayout', () => {
     ];
 
     expect(() => tabulateLayout(hostile)).not.toThrow();
+  });
+
+  it('binds the real PANADOL annotation to its measured row band only', () => {
+    const result = tabulateLayout(measuredItems(REAL_PAGE));
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    const rows: PdfRowGeometry[] = result.medicationRows.map((row) => ({
+      page: 1,
+      ...row,
+    }));
+    const panadol: PdfLinkAnnotation = {
+      page: 1,
+      rect: [39.9, 214.7, 180, 232],
+      productId: '1159424',
+    };
+
+    const ids = mapAnnotationsToRows(rows, [panadol]);
+
+    // VALIUM, SORTIS, CO-DIOVAN, PANADOL, Essigwickel.
+    expect(ids).toEqual([undefined, undefined, undefined, '1159424', undefined]);
+    expect(rows[3]).toMatchObject({ top: 224.3, bottom: 205.7 });
+  });
+});
+
+describe('productIdFromUri', () => {
+  it('reads the Swissmedic id of a product link', () => {
+    expect(productIdFromUri('https://www.swissmedic.ch/product/58356/MPub')).toBe('58356');
+    expect(productIdFromUri('https://example.test/PRODUCT/1159424/MPub?x=1#top')).toBe('1159424');
+    expect(productIdFromUri('/product/23846/MPub')).toBe('23846');
+  });
+
+  it('ignores every other URI silently', () => {
+    expect(productIdFromUri('')).toBeUndefined();
+    expect(productIdFromUri('https://example.test/foo/58356')).toBeUndefined();
+    expect(productIdFromUri('https://example.test/product/abc/MPub')).toBeUndefined();
+    expect(productIdFromUri('https://example.test/product//MPub')).toBeUndefined();
+    expect(productIdFromUri('mailto:someone@example.test')).toBeUndefined();
+  });
+
+  it('rejects crafted paths, unsafe schemes and all-zero ids', () => {
+    // Without the `/MPub` tail the crafted path is not a product link.
+    expect(productIdFromUri('https://www.swissmedic.ch/product/123/../admin')).toBeUndefined();
+    expect(productIdFromUri('https://www.swissmedic.ch/product/123/../MPub')).toBeUndefined();
+    expect(productIdFromUri('https://www.swissmedic.ch/product/1159424')).toBeUndefined();
+    // An all-zero id has no canonical value.
+    expect(productIdFromUri('https://www.swissmedic.ch/product/000/MPub')).toBeUndefined();
+    // Non-web schemes never bind a printed-text identity.
+    expect(productIdFromUri('javascript:/product/1159424/MPub')).toBeUndefined();
+    expect(productIdFromUri('data:text/html,/product/1159424/MPub')).toBeUndefined();
+  });
+
+  it('canonicalizes leading zeros and still binds the canonical Swissmedic id', () => {
+    expect(productIdFromUri('https://www.swissmedic.ch/product/0001159424/MPub')).toBe('1159424');
+    expect(productIdFromUri('https://www.swissmedic.ch/product/1159424/MPub')).toBe('1159424');
+  });
+});
+
+describe('collectLinkAnnotations', () => {
+  const product = {
+    subtype: 'Link',
+    rect: [39.9, 214.7, 180, 232],
+    url: 'https://www.swissmedic.ch/product/1159424/MPub',
+  };
+
+  it('keeps only Link annotations that carry a product id', () => {
+    const annotations = collectLinkAnnotations(
+      [
+        product,
+        { subtype: 'Text', rect: [0, 0, 10, 10], url: product.url },
+        { subtype: 'Link', rect: [0, 0, 10, 10], url: 'https://example.test/other' },
+        { subtype: 'Link', rect: [0, 0, 10, 10] },
+        null,
+        'garbage',
+      ],
+      1,
+    );
+
+    expect(annotations).toEqual([
+      { page: 1, rect: [39.9, 214.7, 180, 232], productId: '1159424' },
+    ]);
+  });
+
+  it('reads the `uri` spelling and normalizes the rect corners', () => {
+    const annotations = collectLinkAnnotations(
+      [
+        {
+          subtype: 'Link',
+          rect: [180, 232, 39.9, 214.7],
+          uri: 'https://www.swissmedic.ch/product/58356/MPub',
+        },
+      ],
+      2,
+    );
+
+    expect(annotations).toEqual([
+      { page: 2, rect: [39.9, 214.7, 180, 232], productId: '58356' },
+    ]);
+  });
+
+  it('skips malformed rects and never throws on hostile payloads', () => {
+    const annotations = collectLinkAnnotations(
+      [
+        { subtype: 'Link', rect: [0, 0, 10], url: product.url },
+        { subtype: 'Link', rect: ['0', 0, 10, 10], url: product.url },
+        { subtype: 'Link', rect: [0, Number.NaN, 10, 10], url: product.url },
+        { subtype: 'Link', rect: product.rect, url: product.url },
+      ],
+      1,
+    );
+
+    expect(annotations).toHaveLength(1);
+    expect(annotations[0]?.productId).toBe('1159424');
+  });
+
+  it('drops a crafted product URI instead of binding it', () => {
+    const annotations = collectLinkAnnotations(
+      [
+        {
+          subtype: 'Link',
+          rect: [39.9, 214.7, 180, 232],
+          url: 'https://www.swissmedic.ch/product/123/../admin',
+        },
+        {
+          subtype: 'Link',
+          rect: [39.9, 214.7, 180, 232],
+          url: 'https://www.swissmedic.ch/product/000/MPub',
+        },
+      ],
+      1,
+    );
+
+    expect(annotations).toEqual([]);
+  });
+
+  it('honours an aggregate collection limit', () => {
+    const annotations = collectLinkAnnotations([product, product, product], 1, 2);
+
+    expect(annotations).toHaveLength(2);
   });
 });

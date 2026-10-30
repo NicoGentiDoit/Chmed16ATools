@@ -12,42 +12,15 @@ import { generateQr, qrToSvg } from '../core/qr-generate';
 import type { QrEcLevel, QrMatrix } from '../core/qr-generate';
 import { NESTING_TOO_DEEP_MESSAGE, isNestingOverflow, validateJsonText } from '../core/validate';
 import type { ValidationError, ValidationResult, ValidationWarning } from '../core/validate';
+import { createButtonWithIcon } from './components/buttons';
+import { copyText, downloadText } from './components/clipboard';
+import { el } from './components/dom';
+import { createDropzone } from './components/dropzone';
+import type { DropRejection } from './components/dropzone';
+import { createTextareaField } from './components/fields';
+import { createFindingsView } from './components/findings';
+import type { Finding } from './components/findings';
 import { format, text } from './strings';
-
-/** Lucide icon name → inline SVG string. */
-function svg(name: string): string {
-  return `<i data-lucide="${name}" aria-hidden="true" style="width:1em;height:1em;vertical-align:-0.125em;flex-shrink:0"></i>`;
-}
-
-/**
- * createButton variant that accepts an optional icon name.
- *
- * The icon must be injected via `innerHTML` (so Lucide can replace it with an
- * SVG); only the visible text part is set through textContent so unknown
- * characters are never escaped twice.
- */
-function createButtonWithIcon(
-  parent: HTMLElement,
-  labelText: string,
-  iconName: string,
-  options: ButtonOptions = {},
-): HTMLButtonElement {
-  const button = el('button', options.className);
-  button.type = 'button';
-  button.setAttribute('aria-label', options.accessibleName ?? labelText);
-  // Insert icon markup first so Lucide can find it.
-  button.insertAdjacentHTML('afterbegin', svg(iconName));
-  // Then set the text node — textContent never touches existing children.
-  button.appendChild(document.createTextNode(` ${labelText}`));
-  parent.append(button);
-  return button;
-}
-
-/** A validation finding flattened for rendering. */
-interface Finding {
-  readonly path: string;
-  readonly message: string;
-}
 
 export interface Panel {
   /** Releases resources held by the panel. */
@@ -60,65 +33,20 @@ const INPUT_ID = 'json-to-chmed-input';
 const OUTPUT_ID = 'json-to-chmed-output';
 const EC_ID = 'json-to-chmed-ec';
 
+/**
+ * Largest text file the drop zone accepts (1 MiB).
+ *
+ * UI-only guard: the textarea itself has no size limit and the core has none
+ * either, so this only keeps an accidental multi-megabyte drop from freezing a
+ * long validation. Typing or pasting the same text is still allowed.
+ */
+const MAX_INPUT_FILE_BYTES = 1024 * 1024;
+
 /** Pixels per module in the exported PNG (integer scale, hence crisp edges). */
 const PNG_MODULE_PX = 8;
 /** Quiet zone in modules (ISO/IEC 18004), matching the on-screen SVG. */
 const PNG_QUIET_ZONE_MODULES = 4;
 const PNG_MIME_TYPE = 'image/png';
-
-/* -------------------------------------------------------------------------- */
-/* Small DOM helpers                                                          */
-/* -------------------------------------------------------------------------- */
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  className?: string,
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  if (className !== undefined) {
-    node.className = className;
-  }
-  return node;
-}
-
-interface TextareaOptions {
-  readonly id: string;
-  readonly label: string;
-  readonly hint?: string;
-  readonly rows?: number;
-  readonly readOnly?: boolean;
-}
-
-function createTextareaField(parent: HTMLElement, options: TextareaOptions): HTMLTextAreaElement {
-  const wrapper = el('div', 'field');
-  const label = el('label', 'field-label');
-  label.htmlFor = options.id;
-  label.textContent = options.label;
-
-  const area = el('textarea', 'field-input');
-  area.id = options.id;
-  area.rows = options.rows ?? 10;
-  area.spellcheck = false;
-  area.readOnly = options.readOnly === true;
-
-  wrapper.append(label, area);
-
-  if (options.hint !== undefined) {
-    const hint = el('p', 'field-hint');
-    hint.id = `${options.id}-hint`;
-    hint.textContent = options.hint;
-    area.setAttribute('aria-describedby', hint.id);
-    wrapper.append(hint);
-  }
-
-  parent.append(wrapper);
-  return area;
-}
-
-interface ButtonOptions {
-  readonly className?: string;
-  readonly accessibleName?: string;
-}
 
 function errorFindings(errors: readonly ValidationError[]): Finding[] {
   return errors.map((error) => ({ path: error.instancePath, message: error.message }));
@@ -128,124 +56,25 @@ function warningFindings(warnings: readonly ValidationWarning[]): Finding[] {
   return warnings.map((warning) => ({ path: warning.path, message: warning.message }));
 }
 
-interface FindingsView {
-  render(errors: readonly Finding[], warnings: readonly Finding[]): void;
-  /** Shows a single neutral message instead of findings. */
-  message(value: string): void;
-}
-
-function createFindingsView(parent: HTMLElement, headingText: string): FindingsView {
-  const section = el('section', 'panel-section');
-  const heading = el('h3');
-  heading.textContent = headingText;
-
-  const container = el('div', 'findings');
-  container.setAttribute('aria-live', 'polite');
-
-  section.append(heading, container);
-  parent.append(section);
-
-  const message = (value: string): void => {
-    container.replaceChildren();
-    const paragraph = el('p', 'findings-summary');
-    paragraph.textContent = value;
-    container.append(paragraph);
-  };
-
-  const render = (errors: readonly Finding[], warnings: readonly Finding[]): void => {
-    container.replaceChildren();
-
-    const summary = el('p', 'findings-summary');
-    summary.textContent = `${text('errorsLabel')}: ${errors.length} · ${text('warningsLabel')}: ${warnings.length}`;
-    container.append(summary);
-
-    if (errors.length === 0 && warnings.length === 0) {
-      const ok = el('p', 'findings-ok');
-      ok.textContent = text('noFindings');
-      container.append(ok);
-      return;
-    }
-
-    appendFindingList(container, text('errorsLabel'), errors, 'is-error');
-    appendFindingList(container, text('warningsLabel'), warnings, 'is-warning');
-  };
-
-  return { render, message };
-}
-
-function appendFindingList(
-  parent: HTMLElement,
-  headingText: string,
-  findings: readonly Finding[],
-  variant: 'is-error' | 'is-warning',
-): void {
-  if (findings.length === 0) {
-    return;
+/**
+ * Wording for a rejected drop.
+ *
+ * The value is always assigned with `textContent`, so a file name can never
+ * become markup. A rejected drop leaves the textarea exactly as it was, and a
+ * read failure is a warning rather than an error: nothing was changed and the
+ * user can paste the same text instead.
+ */
+function dropRejectionMessage(rejection: DropRejection): string {
+  switch (rejection.reason) {
+    case 'unsupported':
+      return format(text('dropFileUnsupported'), { name: rejection.fileName });
+    case 'too-large':
+      return format(text('dropFileTooLarge'), { name: rejection.fileName });
+    case 'multiple':
+      return format(text('dropMultipleFiles'), { name: rejection.fileName });
+    case 'read-error':
+      return text('dropReadFailed');
   }
-
-  const heading = el('h4', `findings-heading ${variant}`);
-  heading.textContent = `${headingText} (${findings.length})`;
-
-  const list = el('ul', `findings-list ${variant}`);
-  for (const finding of findings) {
-    const item = el('li');
-    if (finding.path !== '') {
-      const path = el('code', 'finding-path');
-      path.textContent = finding.path;
-      item.append(path, document.createTextNode(' '));
-    }
-    item.append(document.createTextNode(finding.message));
-    list.append(item);
-  }
-
-  parent.append(heading, list);
-}
-
-/* -------------------------------------------------------------------------- */
-/* Clipboard and download                                                     */
-/* -------------------------------------------------------------------------- */
-
-function legacyCopy(value: string): boolean {
-  try {
-    const area = el('textarea');
-    area.value = value;
-    area.readOnly = true;
-    area.style.position = 'fixed';
-    area.style.top = '-1000px';
-    document.body.append(area);
-    area.select();
-    const copied = document.execCommand('copy');
-    area.remove();
-    return copied;
-  } catch {
-    return false;
-  }
-}
-
-async function copyText(value: string, status: HTMLElement): Promise<void> {
-  try {
-    if (navigator.clipboard !== undefined) {
-      await navigator.clipboard.writeText(value);
-      status.textContent = text('copied');
-      return;
-    }
-  } catch {
-    // Permission or support problems fall through to the legacy path.
-  }
-  status.textContent = legacyCopy(value) ? text('copied') : text('copyFailed');
-}
-
-function downloadText(filename: string, value: string, mimeType: string): void {
-  const url = URL.createObjectURL(new Blob([value], { type: mimeType }));
-  const link = el('a');
-  link.href = url;
-  link.download = filename;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => {
-    URL.revokeObjectURL(url);
-  }, 0);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -333,15 +162,44 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
   heading.textContent = text('tabJsonToChmed');
   container.append(heading);
 
-  const inputSection = el('section', 'panel-section');
-  container.append(inputSection);
+  // Two-column workbench: the input column comes first in the DOM so keyboard
+  // order matches the visual order in both the stacked and the side-by-side
+  // layout. The wrappers only position the existing sections; every id, control
+  // and handler below is unchanged.
+  const workspace = el('div', 'workspace');
+  const primaryColumn = el('div', 'workspace-primary');
+  const secondaryColumn = el('div', 'workspace-secondary');
+  workspace.append(primaryColumn, secondaryColumn);
+  container.append(workspace);
 
-  const jsonInput = createTextareaField(inputSection, {
+  const inputSection = el('section', 'panel-section');
+  primaryColumn.append(inputSection);
+
+  // The drop zone wraps only the labelled field: the whole field is a target,
+  // the visible ring stays around the input, and the actions row is not part of
+  // it. Dropping is a pointer-only affordance — the textarea below is still the
+  // sole keyboard and paste path, and it stays the single source of truth.
+  const dropzone = createDropzone(inputSection, {
+    maxSizeBytes: MAX_INPUT_FILE_BYTES,
+    onFileText: (value) => {
+      loadDroppedText(value);
+    },
+    onReject: (rejection) => {
+      dropzone.status.textContent = dropRejectionMessage(rejection);
+      dropzone.status.classList.add('is-warning');
+    },
+  });
+
+  const jsonInput = createTextareaField(dropzone.zone, {
     id: INPUT_ID,
     label: text('jsonInputLabel'),
     hint: text('jsonInputHint'),
     rows: 14,
   });
+
+  const dragHint = el('p', 'dropzone-hint');
+  dragHint.textContent = text('jsonInputDragHint');
+  dropzone.zone.append(dragHint);
 
   const inputActions = el('div', 'actions');
   inputSection.append(inputActions);
@@ -354,13 +212,16 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
   });
   const encodeButton = createButtonWithIcon(inputActions, text('encodeToChmed'), 'arrow-right-circle');
 
-  const findings = createFindingsView(container, text('validationHeading'));
+  const findings = createFindingsView(secondaryColumn, text('validationHeading'), {
+    // Findings describe the document in the textarea above the actions.
+    getAnchorTarget: () => jsonInput,
+  });
 
   const outputSection = el('section', 'panel-section');
   const outputHeading = el('h3');
   outputHeading.textContent = text('chmedOutputHeading');
   outputSection.append(outputHeading);
-  container.append(outputSection);
+  secondaryColumn.append(outputSection);
 
   const chmedOutput = createTextareaField(outputSection, {
     id: OUTPUT_ID,
@@ -400,7 +261,7 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
   const qrHeading = el('h3');
   qrHeading.textContent = text('qrHeading');
   qrSection.append(qrHeading);
-  container.append(qrSection);
+  secondaryColumn.append(qrSection);
 
   const ecField = el('div', 'field field-inline');
   const ecLabel = el('label', 'field-label');
@@ -485,7 +346,7 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
     renderQr();
   }
 
-  validateButton.addEventListener('click', () => {
+  function runValidation(): void {
     const input = jsonInput.value;
     if (input.trim() === '') {
       findings.message(text('emptyInput'));
@@ -508,7 +369,22 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
     if (!result.ok) {
       resetOutput();
     }
-  });
+  }
+
+  /**
+   * Loads dropped text exactly as if the user had typed it and pressed
+   * Validate: the value is assigned, the field's own `input` event is fired
+   * (the existing listener re-enables Encode) and the same validation path the
+   * Validate button runs is invoked once, so the findings describe the new
+   * text. A second drop replaces the content, the same way retyping would.
+   */
+  function loadDroppedText(value: string): void {
+    jsonInput.value = value;
+    jsonInput.dispatchEvent(new Event('input', { bubbles: true }));
+    runValidation();
+  }
+
+  validateButton.addEventListener('click', runValidation);
 
   encodeButton.addEventListener('click', () => {
     const input = jsonInput.value;
@@ -545,6 +421,8 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
   jsonInput.addEventListener('input', () => {
     // A blocking finding only applies to the text it was produced from.
     encodeButton.disabled = false;
+    // A drop message describes the previous content; an edit makes it stale.
+    dropzone.clearStatus();
   });
 
   ecSelect.addEventListener('change', renderQr);
@@ -570,6 +448,7 @@ export function mountJsonToChmed(container: HTMLElement): Panel {
     // input listener re-enables Encode as soon as a document is typed again.
     encodeButton.disabled = true;
     findings.message(text('notValidated'));
+    dropzone.clearStatus();
     resetOutput();
   });
 

@@ -1,0 +1,155 @@
+{
+  "Patient": {
+    "FName": "Peter",
+    "LName": "Muster",
+    "BDt": "1943-11-01",
+    "Gender": 1,
+    "Street": "2, Seidenhofstrasse, Altstadt",
+    "Zip": "6002",
+    "City": "Luzern",
+    "Lng": "de",
+    "Med": {
+      "Rc": [
+        {
+          "Id": 4
+        },
+        {
+          "Id": 5
+        },
+        {
+          "Id": 2
+        },
+        {
+          "Id": 1,
+          "R": [
+            577
+          ]
+        },
+        {
+          "Id": 6,
+          "R": [
+            571
+          ]
+        }
+      ],
+      "Meas": [
+        {
+          "Type": 1,
+          "Val": "81",
+          "Unit": 2
+        },
+        {
+          "Type": 2,
+          "Val": "180",
+          "Unit": 1
+        }
+      ]
+    }
+  },
+  "Medicaments": [
+    {
+      "Id": "58356",
+      "IdType": 4,
+      "Pos": [
+        {
+          "DtFrom": "2016-03-01",
+          "D": [
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "Unit": "mg",
+      "TkgRsn": "Cholesterinsenker",
+      "PrscbBy": "Dr. Arzt Hans, Münchenhausen",
+      "Roa": "PO"
+    },
+    {
+      "Id": "Essigwickel",
+      "IdType": 1,
+      "Pos": [
+        {
+          "DtFrom": "2016-09-09",
+          "InRes": 1,
+          "D": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "Unit": "-",
+      "TkgRsn": "Fieber",
+      "AppInstr": "bei Bedarf",
+      "AutoMed": 1
+    },
+    {
+      "Id": "93139",
+      "IdType": 4,
+      "Pos": [
+        {
+          "DtFrom": "2016-03-01",
+          "D": [
+            1.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "Unit": "Stk",
+      "TkgRsn": "Bluthochdruck",
+      "PrscbBy": "Dr. Arzt Hans, Münchhausen",
+      "Roa": "PO"
+    },
+    {
+      "Id": "1159424",
+      "IdType": 4,
+      "Pos": [
+        {
+          "DtFrom": "2016-09-09",
+          "InRes": 1,
+          "D": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "Unit": "Stk",
+      "TkgRsn": "Schmerzen",
+      "AppInstr": "bis zu max. 4 mal täglich 1 Tablette einnehmen",
+      "AutoMed": 1,
+      "Roa": "PO"
+    },
+    {
+      "Id": "23846",
+      "IdType": 4,
+      "Pos": [
+        {
+          "DtFrom": "2015-11-03",
+          "D": [
+            2.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "Unit": "ml",
+      "TkgRsn": "Beruhigung",
+      "AppInstr": "nur i.m., nur durch instruierte Personen!",
+      "PrscbBy": "Dr. Example Karl, Wängi",
+      "Roa": "IM"
+    }
+  ],
+  "MedType": 1,
+  "Id": "807a63a8-25e6-45a3-8888-759388507c3c",
+  "Auth": "patient",
+  "Dt": "2026-10-29T09:42:52+01:00",
+  "Rmk": "Der Patient ist vom Medikationsplan begeistert!"
+}

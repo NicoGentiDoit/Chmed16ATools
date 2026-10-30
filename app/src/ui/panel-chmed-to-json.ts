@@ -17,42 +17,14 @@ import {
   validateObject,
 } from '../core/validate';
 import type { ValidationError, ValidationWarning } from '../core/validate';
+import { createButtonWithIcon, svg } from './components/buttons';
+import { copyText, downloadText } from './components/clipboard';
+import { el } from './components/dom';
+import { createTextareaField } from './components/fields';
+import { createFindingsView } from './components/findings';
+import type { Finding } from './components/findings';
+import { createJsonViewer } from './components/json-viewer';
 import { text } from './strings';
-
-/** Lucide icon name → inline SVG string. */
-function svg(name: string): string {
-  return `<i data-lucide="${name}" aria-hidden="true" style="width:1em;height:1em;vertical-align:-0.125em;flex-shrink:0"></i>`;
-}
-
-/**
- * createButton variant that accepts an optional icon name.
- *
- * The icon must be injected via `innerHTML` (so Lucide can replace it with an
- * SVG); only the visible text part is set through textContent so unknown
- * characters are never escaped twice.
- */
-function createButtonWithIcon(
-  parent: HTMLElement,
-  labelText: string,
-  iconName: string,
-  options: ButtonOptions = {},
-): HTMLButtonElement {
-  const button = el('button', options.className);
-  button.type = 'button';
-  button.setAttribute('aria-label', options.accessibleName ?? labelText);
-  // Insert icon markup first so Lucide can find it.
-  button.insertAdjacentHTML('afterbegin', svg(iconName));
-  // Then set the text node — textContent never touches existing children.
-  button.appendChild(document.createTextNode(` ${labelText}`));
-  parent.append(button);
-  return button;
-}
-
-/** A finding flattened for rendering. */
-interface Finding {
-  readonly path: string;
-  readonly message: string;
-}
 
 export interface Panel {
   /** Releases resources held by the panel. */
@@ -67,58 +39,17 @@ const CAMERA_HINT_ID = 'chmed-to-json-camera-hint';
 /** Delay between two camera frames; scanning is cheap but not free. */
 const SCAN_INTERVAL_MS = 250;
 
-/* -------------------------------------------------------------------------- */
-/* Small DOM helpers                                                          */
-/* -------------------------------------------------------------------------- */
+/** Which presentation of the decoded output is visible. */
+type OutputView = 'structured' | 'raw';
 
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  className?: string,
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  if (className !== undefined) {
-    node.className = className;
-  }
-  return node;
-}
-
-interface TextareaOptions {
-  readonly id: string;
-  readonly label: string;
-  readonly hint?: string;
-  readonly rows?: number;
-  readonly readOnly?: boolean;
-}
-
-function createTextareaField(parent: HTMLElement, options: TextareaOptions): HTMLTextAreaElement {
-  const wrapper = el('div', 'field');
-  const label = el('label', 'field-label');
-  label.htmlFor = options.id;
-  label.textContent = options.label;
-
-  const area = el('textarea', 'field-input');
-  area.id = options.id;
-  area.rows = options.rows ?? 10;
-  area.spellcheck = false;
-  area.readOnly = options.readOnly === true;
-
-  wrapper.append(label, area);
-
-  if (options.hint !== undefined) {
-    const hint = el('p', 'field-hint');
-    hint.id = `${options.id}-hint`;
-    hint.textContent = options.hint;
-    area.setAttribute('aria-describedby', hint.id);
-    wrapper.append(hint);
-  }
-
-  parent.append(wrapper);
-  return area;
-}
-
-interface ButtonOptions {
-  readonly className?: string;
-  readonly accessibleName?: string;
+/** Toggle button: a plain secondary button with the pressed state in ARIA. */
+function createViewToggleButton(parent: HTMLElement, label: string): HTMLButtonElement {
+  const button = el('button', 'secondary view-toggle-button');
+  button.type = 'button';
+  button.textContent = label;
+  button.setAttribute('aria-pressed', 'false');
+  parent.append(button);
+  return button;
 }
 
 function errorFindings(errors: readonly ValidationError[]): Finding[] {
@@ -131,126 +62,6 @@ function warningFindings(warnings: readonly ValidationWarning[]): Finding[] {
 
 function decodeFindings(errors: readonly DecodeError[]): Finding[] {
   return errors.map((error) => ({ path: error.code, message: error.message }));
-}
-
-interface FindingsView {
-  render(errors: readonly Finding[], warnings: readonly Finding[]): void;
-  /** Shows a single neutral message instead of findings. */
-  message(value: string): void;
-}
-
-function createFindingsView(parent: HTMLElement, headingText: string): FindingsView {
-  const section = el('section', 'panel-section');
-  const heading = el('h3');
-  heading.textContent = headingText;
-
-  const container = el('div', 'findings');
-  container.setAttribute('aria-live', 'polite');
-
-  section.append(heading, container);
-  parent.append(section);
-
-  const message = (value: string): void => {
-    container.replaceChildren();
-    const paragraph = el('p', 'findings-summary');
-    paragraph.textContent = value;
-    container.append(paragraph);
-  };
-
-  const render = (errors: readonly Finding[], warnings: readonly Finding[]): void => {
-    container.replaceChildren();
-
-    const summary = el('p', 'findings-summary');
-    summary.textContent = `${text('errorsLabel')}: ${errors.length} · ${text('warningsLabel')}: ${warnings.length}`;
-    container.append(summary);
-
-    if (errors.length === 0 && warnings.length === 0) {
-      const ok = el('p', 'findings-ok');
-      ok.textContent = text('noFindings');
-      container.append(ok);
-      return;
-    }
-
-    appendFindingList(container, text('errorsLabel'), errors, 'is-error');
-    appendFindingList(container, text('warningsLabel'), warnings, 'is-warning');
-  };
-
-  return { render, message };
-}
-
-function appendFindingList(
-  parent: HTMLElement,
-  headingText: string,
-  findings: readonly Finding[],
-  variant: 'is-error' | 'is-warning',
-): void {
-  if (findings.length === 0) {
-    return;
-  }
-
-  const heading = el('h4', `findings-heading ${variant}`);
-  heading.textContent = `${headingText} (${findings.length})`;
-
-  const list = el('ul', `findings-list ${variant}`);
-  for (const finding of findings) {
-    const item = el('li');
-    if (finding.path !== '') {
-      const path = el('code', 'finding-path');
-      path.textContent = finding.path;
-      item.append(path, document.createTextNode(' '));
-    }
-    item.append(document.createTextNode(finding.message));
-    list.append(item);
-  }
-
-  parent.append(heading, list);
-}
-
-/* -------------------------------------------------------------------------- */
-/* Clipboard and download                                                     */
-/* -------------------------------------------------------------------------- */
-
-function legacyCopy(value: string): boolean {
-  try {
-    const area = el('textarea');
-    area.value = value;
-    area.readOnly = true;
-    area.style.position = 'fixed';
-    area.style.top = '-1000px';
-    document.body.append(area);
-    area.select();
-    const copied = document.execCommand('copy');
-    area.remove();
-    return copied;
-  } catch {
-    return false;
-  }
-}
-
-async function copyText(value: string, status: HTMLElement): Promise<void> {
-  try {
-    if (navigator.clipboard !== undefined) {
-      await navigator.clipboard.writeText(value);
-      status.textContent = text('copied');
-      return;
-    }
-  } catch {
-    // Permission or support problems fall through to the legacy path.
-  }
-  status.textContent = legacyCopy(value) ? text('copied') : text('copyFailed');
-}
-
-function downloadText(filename: string, value: string, mimeType: string): void {
-  const url = URL.createObjectURL(new Blob([value], { type: mimeType }));
-  const link = el('a');
-  link.href = url;
-  link.download = filename;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => {
-    URL.revokeObjectURL(url);
-  }, 0);
 }
 
 /** Turns an unexpected throw (e.g. a stack overflow) into a blocking finding. */
@@ -272,8 +83,16 @@ export function mountChmedToJson(container: HTMLElement): Panel {
   heading.textContent = text('tabChmedToJson');
   container.append(heading);
 
+  // Input column first in the DOM (keyboard order = visual order at every
+  // breakpoint); the wrappers are structural only.
+  const workspace = el('div', 'workspace');
+  const primaryColumn = el('div', 'workspace-primary');
+  const secondaryColumn = el('div', 'workspace-secondary');
+  workspace.append(primaryColumn, secondaryColumn);
+  container.append(workspace);
+
   const inputSection = el('section', 'panel-section');
-  container.append(inputSection);
+  primaryColumn.append(inputSection);
 
   const chmedInput = createTextareaField(inputSection, {
     id: INPUT_ID,
@@ -294,7 +113,7 @@ export function mountChmedToJson(container: HTMLElement): Panel {
   const scanHeading = el('h3');
   scanHeading.textContent = text('scanHeading');
   scanSection.append(scanHeading);
-  container.append(scanSection);
+  primaryColumn.append(scanSection);
 
   const fileField = el('div', 'field');
   const fileLabel = el('label', 'field-label');
@@ -334,21 +153,42 @@ export function mountChmedToJson(container: HTMLElement): Panel {
   scanStatus.setAttribute('aria-live', 'polite');
   scanSection.append(scanStatus);
 
-  const findings = createFindingsView(container, text('resultsHeading'));
+  const findings = createFindingsView(secondaryColumn, text('resultsHeading'), {
+    // Findings describe the CHMED16A string typed or scanned into the input.
+    getAnchorTarget: () => chmedInput,
+  });
 
   const outputSection = el('section', 'panel-section');
   const outputHeading = el('h3');
   outputHeading.textContent = text('jsonOutputHeading');
   outputSection.append(outputHeading);
-  container.append(outputSection);
+  secondaryColumn.append(outputSection);
 
-  const jsonOutput = createTextareaField(outputSection, {
+  // View toggle: its own row above the output, deliberately outside the
+  // copy/download `.actions` rows so its buttons can never be mistaken for a
+  // data action. `aria-pressed` carries the state for assistive technology.
+  const viewToggle = el('div', 'view-toggle');
+  viewToggle.setAttribute('role', 'group');
+  viewToggle.setAttribute('aria-label', text('jsonViewGroupLabel'));
+  const structuredViewButton = createViewToggleButton(viewToggle, text('jsonViewStructured'));
+  const rawViewButton = createViewToggleButton(viewToggle, text('jsonViewRaw'));
+  outputSection.append(viewToggle);
+
+  // Two hosts, only one visible at a time. The raw host keeps the textarea
+  // field untouched; the structured host contains the presentation-only viewer.
+  const rawView = el('div', 'json-view-raw');
+  outputSection.append(rawView);
+  const jsonOutput = createTextareaField(rawView, {
     id: OUTPUT_ID,
     label: text('jsonOutputLabel'),
     hint: text('jsonOutputHint'),
     rows: 16,
     readOnly: true,
   });
+
+  const structuredView = el('div', 'json-view-structured');
+  outputSection.append(structuredView);
+  const jsonViewer = createJsonViewer(structuredView);
 
   const outputActions = el('div', 'actions');
   outputSection.append(outputActions);
@@ -377,6 +217,21 @@ export function mountChmedToJson(container: HTMLElement): Panel {
   let scanning = false;
   let scanTimer: number | null = null;
 
+  // The raw textarea is the initial view; the first successful decode switches
+  // to Structured unless the user already picked a view. Neither flag is
+  // persisted: the choice lives for this session only (no localStorage).
+  let hasDecoded = false;
+  let userSelectedView = false;
+
+  /** Switches visibility only — content is never recomputed here. */
+  function applyView(view: OutputView): void {
+    const structured = view === 'structured';
+    structuredViewButton.setAttribute('aria-pressed', String(structured));
+    rawViewButton.setAttribute('aria-pressed', String(!structured));
+    rawView.hidden = structured;
+    structuredView.hidden = !structured;
+  }
+
   function setScanStatus(message: string, variant: '' | 'is-error' | 'is-warning'): void {
     scanStatus.classList.remove('is-error', 'is-warning');
     if (variant !== '') {
@@ -387,9 +242,12 @@ export function mountChmedToJson(container: HTMLElement): Panel {
 
   function clearOutput(): void {
     jsonOutput.value = '';
+    jsonViewer.clear();
     copyButton.disabled = true;
     downloadButton.disabled = true;
     outputStatus.textContent = '';
+    // The view itself is intentionally left alone: clearing resets both
+    // presentations' content, while the user's toggle choice persists.
   }
 
   function stopScanLoop(): void {
@@ -522,15 +380,41 @@ export function mountChmedToJson(container: HTMLElement): Panel {
     }
 
     jsonOutput.value = JSON.stringify(parsed.value, null, 2);
+    // Pure presentation: the viewer receives the decoded object (not the
+    // textarea text), and the textarea above stays byte-identical and canonical
+    // for copy/download. Re-rendering the viewer never writes to the textarea.
+    jsonViewer.render(parsed.value);
     copyButton.disabled = false;
     downloadButton.disabled = false;
     outputStatus.textContent = '';
+
+    // First successful decode: show the structured presentation by default.
+    // Once the user has toggled, their choice wins across later decodes.
+    if (!hasDecoded) {
+      hasDecoded = true;
+      if (!userSelectedView) {
+        applyView('structured');
+      }
+    }
 
     const validation = validateObject(parsed.value);
     findings.render(errorFindings(validation.errors), warningFindings(validation.warnings));
   }
 
   decodeButton.addEventListener('click', decodeCurrentInput);
+
+  structuredViewButton.addEventListener('click', () => {
+    userSelectedView = true;
+    applyView('structured');
+  });
+
+  rawViewButton.addEventListener('click', () => {
+    userSelectedView = true;
+    applyView('raw');
+  });
+
+  // Pre-decode state: the raw textarea (today's behaviour).
+  applyView('raw');
 
   fileInput.addEventListener('change', () => {
     const file = fileInput.files?.[0];

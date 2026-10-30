@@ -1,22 +1,39 @@
 /*
- * CHMED16A Tools — glassmorphism stylesheet.
+ * CHMED16A Workbench — application stylesheet.
+ *
+ * The visual language is a calm healthcare/SaaS workbench rather than a
+ * decorative showcase: light-first, white and very light grey surfaces, one
+ * deep-blue primary, hairline borders, 4 / 6 / 8px radii and low, functional
+ * shadows. There is exactly one rendering path — every surface is opaque, so
+ * text contrast can always be measured against a known composited colour.
  *
  * Design principles:
- *   • Translucent glass shell chrome: the header, tablist and tabpanels are
- *     semi-transparent surfaces with backdrop blur, floating over an animated
- *     gradient-blob body layer (primary / accent blue hues only).
- *   • Solid, opaque inner surfaces: form controls, findings, the QR plate and
- *     the camera feed never take glass — legibility and semantics win.
- *   • Blob motion is transform-only and disabled under prefers-reduced-motion;
- *     backdrop blur is never animated.
- *   • Progressive enhancement: solid surfaces render first, glass is layered on
- *     inside @supports (backdrop-filter); layout is identical on both paths.
- *   • Strong typographic hierarchy via size / weight, not colour alone.
- *   • Success / error / warning always paired with an icon and text label so
- *     colour-blind users can distinguish every state.
- *   • Visible focus rings on every interactive target; reduced-motion honoured.
- *   • Light mode first; dark mode via prefers-color-scheme, with glass-scoped
- *     text colours that keep contrast >= 4.5:1 on the blurred backdrop.
+ *   • Opaque surfaces everywhere. The header is a light band, the toolbar and
+ *     the panels are white plates; controls, findings, the QR plate, the
+ *     camera feed and the draft banner are solid too.
+ *   • One primary (#0f4c81, unchanged) carries primary actions and the
+ *     selected tab. Success / warning / error keep their paired border + tint
+ *     + text treatment, so colour is never the only signal.
+ *   • No decorative motion. The only animation left is the tab-panel entrance
+ *     (opacity + transform), which carries meaning, and it is disabled by the
+ *     prefers-reduced-motion kill-switch below.
+ *   • Light mode first; dark mode re-declares the same colour tokens inside a
+ *     prefers-color-scheme media query. The dark on-primary ink stays #0a1628:
+ *     it is the MASTER-verified value for the lighter dark-mode blue.
+ *   • Visible focus rings on every interactive target, ≥ 44px primary targets,
+ *     body copy ≥ 14px.
+ *
+ * Token changelog (Workbench restyle, phase 1):
+ *   removed — the four translucent-shell surface tokens, their two hover
+ *             companions, their border and shadow companions, the shell blur
+ *             radius, the shell 16px radius, and the three background-layer
+ *             hue tokens. No rule references them any more.
+ *   kept    — every colour, spacing, radius, shadow and type token that the
+ *             markup or the TypeScript relies on. Values the design system
+ *             measures contrast against are byte-identical.
+ *   added   — none. The Workbench needs no new colour role. Phase 6 appends the
+ *             `--color-json-*` aliases only; each points at a token above, so
+ *             still no new hue.
  *
  * No framework. Vite inlines this into the bundle.
  */
@@ -27,6 +44,9 @@
 
 :root {
   /* ── colours ─────────────────────────────────────────────────────────────── */
+  /* Canonical deep blue. Deliberately unchanged: white-on-primary (8.8:1) and
+     the dark on-primary ink are measured against this exact value. The lighter
+     interactive blue lives in `--color-accent`, which dark mode re-declares. */
   --color-primary: #0f4c81;
   --color-on-primary: #ffffff;
   --color-text: #1a1a1a;
@@ -38,6 +58,16 @@
   --color-elevation: #ffffff;
 
   --color-accent: var(--color-primary);
+
+  /* JSON syntax tokens (phase 6). Pure aliases — no new hues: keys use the
+     accent tint, strings the body ink, numbers the muted ink; booleans reuse
+     the accent (bolder weight) and null the muted ink (italic). Keeping green,
+     amber and red reserved for findings/semantic feedback. */
+  --color-json-key: var(--color-accent);
+  --color-json-string: var(--color-text);
+  --color-json-number: var(--color-text-muted);
+  --color-json-boolean: var(--color-accent);
+  --color-json-null: var(--color-text-muted);
 
   /* semantic feedback — each has a background variant for double-coding */
   --color-success: #1a7f37;
@@ -61,6 +91,8 @@
   --space-2xl: 3rem;     /* 48px */
 
   /* ── radius ──────────────────────────────────────────────────────────────── */
+  /* Moderate only: the shell plates use --radius-lg (8px). A 16px shell radius
+     belonged to the previous theme and is gone for good. */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
@@ -70,24 +102,9 @@
   --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.08);
   --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.10);
 
-  /* ── glass surfaces + control surfaces ───────────────────────────────────── */
+  /* ── control surfaces (always opaque) ─────────────────────────────────────── */
   --color-control-bg: #ffffff;
   --color-control-bg-muted: #f7fafc;
-  --color-glass-surface: rgba(255, 255, 255, 0.60);
-  --color-glass-surface-strong: rgba(255, 255, 255, 0.75);
-  --color-glass-border: rgba(15, 76, 129, 0.16);
-  --color-glass-shadow: 0 8px 32px rgba(15, 76, 129, 0.12);
-  /* Hover = frost deepens (+0.06 alpha) and the float shadow settles. Light
-     glass only ever gets lighter, so the delta is safe for dark text. */
-  --color-glass-surface-hover: rgba(255, 255, 255, 0.66);
-  --color-glass-shadow-hover: 0 12px 40px rgba(15, 76, 129, 0.16);
-  --blur-glass: 12px;
-  --radius-glass: 16px;
-
-  /* ── background blob layer (primary / accent blue hues only) ─────────────── */
-  --color-blob-primary: rgba(15, 76, 129, 0.30);
-  --color-blob-accent: rgba(91, 155, 213, 0.32);
-  --color-blob-neutral: rgba(200, 186, 160, 0.22);
 
   /* ── type ────────────────────────────────────────────────────────────────── */
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
@@ -119,31 +136,14 @@
     --color-error: #ff6b6b;
     --color-error-bg: #2a0a0a;
 
-    /* glass / control surfaces — translucent tint over the dark canvas */
+    /* solid control plates — no translucency in either scheme */
     --color-control-bg: #0d1117;
     --color-control-bg-muted: #11161d;
-    --color-glass-surface: rgba(230, 237, 243, 0.16);
-    /* 0.20 (not 0.26): the selected tab stacks a second tint on top of the
-       tablist glass, and 0.26 pushed the label to ~3.5:1. 0.20 + white text
-       keeps the selected label at ~4.8:1 worst case. */
-    --color-glass-surface-strong: rgba(230, 237, 243, 0.20);
-    --color-glass-border: rgba(230, 237, 243, 0.20);
-    --color-glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
-    /* Hover frost is +0.02 here, not the light path's +0.06: light text on a
-       lighter plate loses contrast, and the measured worst-case backdrop
-       (#43576a, blob peak behind the glass) has only ~0.2 alpha of headroom.
-       0.18 keeps muted text at ~4.6:1; 0.22 would drop it to ~4.1:1. */
-    --color-glass-surface-hover: rgba(230, 237, 243, 0.18);
-    --color-glass-shadow-hover: 0 12px 40px rgba(0, 0, 0, 0.50);
 
-    /* Focus ring: #1565c0 measures ~1.3:1 on dark glass, so dark mode uses a
-       light blue that clears 3:1 on every dark surface (3.1:1 on strong glass). */
+    /* Focus ring: #1565c0 measures 2.82:1 on --color-elevation (#1c2128) and
+       3.29:1 on --color-bg (#0d1117), so dark mode uses a light blue that
+       clears 3:1 on every one of them (#a5d6ff on --color-elevation ≈ 10:1). */
     --color-ring: #a5d6ff;
-
-    /* background blob layer (primary / accent blue hues only) */
-    --color-blob-primary: rgba(43, 108, 176, 0.38);
-    --color-blob-accent: rgba(91, 155, 213, 0.30);
-    --color-blob-neutral: rgba(170, 152, 120, 0.18);
   }
 }
 
@@ -188,47 +188,10 @@ body {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   Background layer — animated gradient blobs
-   Fixed pseudo paints above the canvas background propagated from <body> and
-   below all content. Blur lives on the layer, never animated; the keyframes move
-   the layer with transforms only (compositor-friendly).
-   ───────────────────────────────────────────────────────────────────────────── */
-
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  contain: layout paint style;
-  background-image:
-    radial-gradient(circle 55vmax at 15% 8%, var(--color-blob-primary) 0%, transparent 62%),
-    radial-gradient(circle 45vmax at 85% 26%, var(--color-blob-accent) 0%, transparent 60%),
-    radial-gradient(circle 50vmax at 52% 92%, var(--color-blob-neutral) 0%, transparent 60%);
-  background-repeat: no-repeat;
-  filter: blur(40px);
-  transform: translate3d(0, 0, 0);
-  animation: blob-drift 24s ease-in-out infinite alternate;
-}
-
-@keyframes blob-drift {
-  0% {
-    transform: translate3d(-2%, -1%, 0) scale(1);
-  }
-  100% {
-    transform: translate3d(2%, 1%, 0) scale(1.05);
-  }
-}
-
-/* Explicit opt-out on top of the global kill-switch below */
-@media (prefers-reduced-motion: reduce) {
-  body::before {
-    animation: none;
-  }
-}
-
-/* ─────────────────────────────────────────────────────────────────────────────
    App shell
+   Single-column measure on phone/tablet (48rem), a 52rem tablet measure from
+   768px, and room for the two-column workspace from 1024px. The workspace grid
+   itself lives with the panel sections below.
    ───────────────────────────────────────────────────────────────────────────── */
 
 .app {
@@ -242,104 +205,144 @@ body::before {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   Header
+   Header — a flat light band above the white work area
    ───────────────────────────────────────────────────────────────────────────── */
 
-/* Solid base shell: fully readable with no backdrop-filter support.
-   The @supports block below layers the glass treatment on top.
-   `position: relative` + `isolation: isolate` give the ambient sweep pseudo a
-   stacking context of its own, so its negative z-index paints above this
-   plate's fill but below the copy. `overflow: clip` confines that sweep to the
-   plate: nothing in the header is positioned or overflows the padding box
-   (`h1::before` is an in-flow inline-block), and an element's own `box-shadow`
-   is not clipped by its overflow, so the float shadow still paints. `clip`
-   (not `hidden`) creates no scroll container. */
 .app-header {
-  position: relative;
-  overflow: clip;
-  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
   padding: var(--space-lg);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-glass);
-  background: var(--color-elevation);
-  transition: background-color 400ms ease, box-shadow 400ms ease;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
 }
 
-/* Ambient specular sweep: one slow glint crossing the header plate. A 45%-wide
-   skewed gradient band translates from outside the left edge to outside the
-   right edge on a 30s linear loop; it paints under the copy (z-index -1) and is
-   clipped to the plate by the header's overflow. Transform-only, so the
-   compositor owns it — no filter or backdrop-filter is touched, and no
-   permanent `will-change` layer is left behind (the running animation promotes
-   the band itself). The white stops are a light artefact, not a surface
-   colour, hence no token; effective peak paint is 0.06 × 0.55 ≈ 3% white, so
-   text contrast is unaffected even over the worst-case blob backdrop. */
-.app-header::after {
-  content: '';
-  position: absolute;
-  z-index: -1;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 45%;
-  border-radius: inherit;
-  background: linear-gradient(
-    105deg,
-    rgba(255, 255, 255, 0) 0%,
-    rgba(255, 255, 255, 0.55) 50%,
-    rgba(255, 255, 255, 0) 100%
-  );
-  opacity: 0.06;
-  transform: translate3d(-140%, 0, 0) skewX(-15deg);
-  pointer-events: none;
-  animation: header-sheen 30s linear infinite;
+/* Brand bar: the persistent identity on the left, the build version on the
+   right. Wraps on narrow phones (the version drops below the brand). */
+.app-header-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm) var(--space-md);
 }
 
-@keyframes header-sheen {
-  from {
-    transform: translate3d(-140%, 0, 0) skewX(-15deg);
-  }
-  to {
-    transform: translate3d(360%, 0, 0) skewX(-15deg);
-  }
+/* The h1 keeps the document outline; its only child is the brand button. */
+.brand-heading {
+  margin: 0;
+  font: inherit;
+  letter-spacing: normal;
 }
 
-/* The sweep is pure decoration, so reduced motion removes the layer outright
-   (a stopped loop would otherwise park the band mid-plate). Declared after the
-   animation above: equal specificity means the later rule must be the one that
-   wins. */
-@media (prefers-reduced-motion: reduce) {
-  .app-header::after {
-    animation: none;
-    display: none;
-  }
-}
-
-.app-header h1 {
-  margin: 0 0 var(--space-xs);
-  font-size: 1.5rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
+/* Brand is a native button ("back to home" works with mouse, keyboard and
+   screen readers) and therefore must not inherit the primary-action skin. */
+button.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-height: 2.75rem;
+  padding: var(--space-xs) var(--space-sm);
+  border-color: transparent;
+  background: transparent;
   color: var(--color-text);
+  text-align: left;
 }
 
-.app-header h1::before {
-  /* small blue square accent; accent token (light #0f4c81, dark #5b9bd5) so the
-     mark stays visible on dark glass */
-  content: '';
-  display: inline-block;
-  width: 0.35em;
-  height: 0.35em;
-  background: var(--color-accent);
+button.brand:hover:not(:disabled) {
+  filter: none;
+  background: var(--color-elevation);
+  border-color: var(--color-border-subtle);
+}
+
+/* Small blue square brand mark; accent token (light #0f4c81, dark #5b9bd5) so
+   the mark stays visible in both schemes. */
+.brand-mark {
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
   border-radius: var(--radius-sm);
-  vertical-align: middle;
-  margin-right: 0.4em;
+  background: var(--color-accent);
 }
 
-.app-description {
-  margin: 0 0 var(--space-sm);
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.brand-name {
+  font-size: 1.25rem;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+.brand-subtitle {
   color: var(--color-text-muted);
-  font-size: 0.9375rem;
+  font-size: 0.8125rem;
+  font-weight: 400;
+  line-height: 1.3;
+}
+
+/* Build version from `package.json`, injected by Vite as a define. */
+.app-version {
+  padding: 0.125rem var(--space-sm);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--color-elevation);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Skip link — off-screen until focused, then a real, visible target
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.skip-link {
+  position: absolute;
+  top: var(--space-sm);
+  left: var(--space-sm);
+  z-index: 100;
+  padding: var(--space-sm) var(--space-md);
+  border: 2px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  background: var(--color-elevation);
+  color: var(--color-primary);
+  font-weight: 600;
+  text-decoration: none;
+  transform: translateY(-300%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+.skip-link:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
+/* Dark scheme. `--color-primary` is not re-declared for dark, so the light
+   #0f4c81 label and border would sit at 1.83:1 on the elevation plate the skip
+   link paints over. The palette's dark interactive blue fixes both: label
+   5.47:1 against that plate (≥ 4.5:1) and border 5.47:1 (≥ 3:1), and 6.39:1
+   against the page background. Light mode is untouched: #0f4c81 on white,
+   8.86:1. Declared after the base rule so equal specificity resolves here. */
+@media (prefers-color-scheme: dark) {
+  .skip-link {
+    border-color: var(--color-accent);
+    color: var(--color-accent);
+  }
+}
+
+/* The work area is the skip target; give the fragment jump a visible ring. */
+.tabpanels:focus {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 4px;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -357,15 +360,8 @@ body::before {
   line-height: 1.55;
 }
 
-.notice-inline {
-  border-left-color: var(--color-warning);
-  background: var(--color-warning-bg);
-  color: var(--color-warning);
-  font-weight: 500;
-}
-
 /* ─────────────────────────────────────────────────────────────────────────────
-   Tabs
+   Tabs — a white toolbar plate with chips; the selected chip is a primary fill
    ───────────────────────────────────────────────────────────────────────────── */
 
 .app-tabs {
@@ -374,69 +370,42 @@ body::before {
   gap: 0;
 }
 
-/* Fully rounded floating plate. No `overflow` rule here on purpose: nothing
-   protrudes past the plate — the chips are inset from the border on all four
-   sides — so there is nothing to clip and no reason to risk it.
+/* While the home view is displayed, `tabs.ts` hides the chips row (the three
+   cards are the navigation there). The empty nav must not keep the header's
+   flex gap alive, or the brand band would grow by a gap with no content. */
+.app-nav:has(> .app-tabs[hidden]) {
+  display: none;
+}
 
-   Junction geometry (why full rounding, not a joined-card bridge):
-   `.app-tabs` is a 0-gap column, but `.tabpanels` adds 24px (--space-lg) of
-   padding-top, so 24px of page shows between the tablist's bottom border and
-   the tabpanel's top border. That is a gap, not a seam: the panel's 16px top
-   corners cannot "receive" the tablist's bottom corners, and square bottom
-   corners on the tablist read as two hard edges of their own. Both plates
-   therefore carry --radius-glass on all four corners.
-
-   Inline padding is 16px (--space-md) so the chip corners clear the plate's
-   corner arcs: 1px border + 16px padding puts the first/last chip 17px from
-   the outer edge, i.e. past the 16px bottom-corner arc, so a chip's own 16px
-   bottom arc can never cross the plate's curve.
-
-   Bottom padding is 2px, not 0: that is the breathing inset which keeps the
-   chip's own 1px bottom border visually separate from the tablist's 1px
-   straight seam line. The seam is no longer bridged or covered by the
-   selected chip — it runs continuously under every chip. */
+/* Toolbar plate. Inline padding is 16px (--space-md) so a chip's own corner arc
+   always clears the plate's 8px arc. The 4px (--space-xs) vertical padding keeps
+   the chips off the plate's hairline border without changing their 44px height. */
 .tablist {
   display: flex;
   flex-wrap: wrap;
-  /* Gap equals the inline padding (--space-md, 16px) so the rhythm is even:
-     the space between two chips (16px) matches the space from the plate's
-     inner border to a chip (16px), i.e. 17px from the outer edge once the 1px
-     border is counted — a 1px difference the eye reads as equal. The earlier
-     --space-xs (4px) gap made the side margins look four times the chip gap.
-     Only the distance *between* chips changes: the first/last chip keep their
-     17px inset, so the corner-arc clearance described above is untouched. */
+  /* Gap equals the inline padding (--space-md, 16px) so the rhythm is even: the
+     space between two chips matches the space from the plate's inner border to a
+     chip. */
   gap: var(--space-md);
-  padding: var(--space-xs) var(--space-md) 2px;
+  padding: var(--space-xs) var(--space-md);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-glass);
+  border-radius: var(--radius-lg);
   background: var(--color-elevation);
-  /* Hover frost/shadow only; the chip cross-fade below is separate. */
-  transition: background-color 400ms ease, box-shadow 400ms ease;
 }
 
 .tab {
   padding: 0.625rem 1.125rem;
   border: 1px solid transparent;
-  /* Fully rounded chip on all four corners: the same 16px silhouette as the
-     tablist, header and panels, so idle, hover and selected never disagree on
-     geometry (a smaller idle chip next to a 16px selected plate made the
-     hover→selected handoff look like a radius jump). Square bottom corners
-     only ever existed to bridge the tablist's 1px bottom border; a flush
-     square edge under a rounded plate leaves curved cutouts, so the chip is
-     rounded all round and the seam line simply stays visible beneath it. */
-  border-radius: var(--radius-glass);
+  /* 6px chip inside an 8px plate: the two arcs are close enough to read as one
+     family, and the chip stays a chip rather than a pill. */
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--color-text-muted);
   font: inherit;
   font-weight: 500;
   font-size: 0.9375rem;
   cursor: pointer;
-  /* Chip state cross-fade. Explicit property list, no `all`. `border-radius`
-     is deliberately absent: chip geometry snaps by design decision (round
-     2d) so idle/hover/selected can never disagree mid-transition. End values
-     are untouched — only the timing changed (150 → 180ms) — so the selected
-     chip's opaque composite and its verified 8.8:1 / 9.0:1 label contrast
-     hold. */
+  /* Explicit property list, no `all`; geometry snaps between states by design. */
   transition:
     color 180ms ease,
     background-color 180ms ease,
@@ -444,79 +413,58 @@ body::before {
     box-shadow 180ms ease;
 }
 
-/* Solid surface wash (readable in both colour schemes); never glass on the
-   buttons themselves — nested backdrop-filters are a repaint trap.
-   No radius declaration: the wash inherits `.tab`'s --radius-glass, so base,
-   hover and selected geometry cannot drift apart. */
+/* Idle → hover: a light surface wash plus a hairline edge. Text darkens as well,
+   so the state is never signalled by the wash alone. */
 .tab:hover {
   color: var(--color-text);
   background: var(--color-surface);
+  border-color: var(--color-border-subtle);
 }
 
+/* Selected chip: solid primary fill with on-primary ink — white on #0f4c81 in
+   light (8.8:1), MASTER dark ink on #5b9bd5 in dark (6.1:1). Weight and fill
+   both change, so selection does not rely on hue. */
 .tab[aria-selected='true'] {
-  border-color: var(--color-border);
-  /* Fully rounded opaque chip, 16px on every corner to match the .tablist
-     plate (--radius-glass); 16px on a 44px-tall tab (2.75rem) is a 0.36
-     ratio, so the arc stays a corner, not a pill. The bottom corners round
-     like the top ones — the 1px bottom border is *not* covered, it stays the
-     tablist's continuous straight seam line under the chip. Nothing paints
-     outside this box's rounded outline, so no negative margin and no
-     overflow rule are involved.
-     Padding clears the arc: 18px inline (12px at the 375px breakpoint) vs a
-     corner inset of only ~1.6px at the text's cap line. */
-  border-radius: var(--radius-glass);
-  color: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-on-primary);
   font-weight: 600;
-  background: var(--color-elevation);
+  background: var(--color-accent);
 }
 
-/* Dark mode only: the accent blue on an elevated/glass surface sits near 2.5:1,
-   so the selected label uses full-strength white on the strong glass tint
-   (~4.8:1 worst case; surface + weight + border already signal selection).
-   Light mode keeps the accent label at ~8:1. */
-@media (prefers-color-scheme: dark) {
-  .tab[aria-selected='true'] {
-    color: #ffffff;
-  }
-}
-
+/* The ring sits outside the chip: an inset ring in --color-ring would disappear
+   into the selected chip's primary fill. */
 .tab:focus-visible {
   outline: 2px solid var(--color-ring);
-  outline-offset: -2px;
+  outline-offset: 2px;
 }
 
-/* 24px of page between the tablist and the panel: the two glass plates are
-   separate cards, not a joined tab-sheet, so neither side borrows the other's
-   corner treatment. */
+/* The nav now lives in the header plate; `.app`'s gap separates it from the
+   work area, so the old extra 24px between toolbar and panel is gone. */
 .tabpanels {
-  padding-top: var(--space-lg);
+  padding-top: 0;
 }
 
 .tabpanel {
   padding: var(--space-lg);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-glass);
+  border-radius: var(--radius-lg);
   background: var(--color-elevation);
-  /* Frost deepens and the float shadow settles on hover (values live in the
-     @supports block); opacity/transform carry the tab-switch entrance.
-     `backdrop-filter` is absent on purpose: re-blurring the backdrop every
-     frame is the expensive path, so the blur radius stays pinned at
-     --blur-glass and only cheap properties move. */
+  /* Light, functional depth — never animated, so only the entrance transition
+     touches opacity / transform. */
+  box-shadow: var(--shadow-sm);
   transition:
-    background-color 400ms ease,
-    box-shadow 400ms ease,
     opacity 350ms ease-out,
     transform 350ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
-/* Tab-switch entrance: `hidden` toggles `display: none` (see [hidden] above),
-   so removing the attribute is the first style update of the newly rendered
-   panel and `@starting-style` supplies the beginning of the transition. Naming
+/* Tab-switch entrance: `hidden` toggles `display: none` (see [hidden] above), so
+   removing the attribute is the first style update of the newly rendered panel
+   and `@starting-style` supplies the beginning of the transition. Naming
    `display` in the transition list with `allow-discrete` is not needed here and
    would delay the outgoing panel's hide — only the entrance is animated.
    Browsers without `@starting-style` (Chromium < 117, Safari < 17.5) render the
-   panel resolved: progressive, no polyfill. The initially visible panel
-   resolves once on load, which is accepted. */
+   panel resolved: progressive, no polyfill. The initially visible panel resolves
+   once on load, which is accepted. */
 @starting-style {
   .tabpanel:not([hidden]) {
     opacity: 0;
@@ -540,125 +488,87 @@ body::before {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   Glass surfaces — progressive enhancement
-   Everything above is the solid fallback. Only browsers that can actually blur
-   the body blob layer get translucency. The `or (-webkit-...)` arm covers
-   WebKit builds exposing just the prefixed property, so no second @supports
-   query is required; both properties are declared for the same reason.
-   The blob layer's pixels rasterize once, but its transform animation
-   re-triggers every glass backdrop blur each frame — that is a steady idle GPU
-   cost even when nothing on the page changes. `prefers-reduced-transparency`
-   (below) drops the blob layer and flattens the shells back to opaque.
+   Home view — three flow cards, one per existing tab
    ───────────────────────────────────────────────────────────────────────────── */
 
-@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
-  .app-header,
-  .tablist,
-  .tabpanel {
-    background: var(--color-glass-surface);
-    -webkit-backdrop-filter: blur(var(--blur-glass));
-    backdrop-filter: blur(var(--blur-glass));
-    border: 1px solid var(--color-glass-border);
-    box-shadow: var(--color-glass-shadow);
-    border-radius: var(--radius-glass);
-  }
-
-  /* Hover frost: the plate thickens its tint and its float shadow settles
-     lower and softer. Only `background-color` and `box-shadow` change — both
-     cheap paints — and the blur radius stays pinned at --blur-glass for the
-     whole transition. No transform lift on any plate: three plates moving
-     under one pointer reads as decorative jitter, and the glass quality being
-     animated is frost + depth, not geometry. */
-  .app-header:hover,
-  .tablist:hover,
-  .tabpanel:hover {
-    background-color: var(--color-glass-surface-hover);
-    box-shadow: var(--color-glass-shadow-hover);
-  }
-
-  /* Tabs sit on the tablist's glass. The chips carry the plate's all-round
-     16px radius on every corner, and the 1px bottom border stays a continuous
-     straight seam line beneath them rather than a bridge they cover. */
-  .tablist {
-    border-radius: var(--radius-glass);
-    border-bottom: 1px solid var(--color-glass-border);
-  }
-
-  /* The strong tint alone is translucent, so the selected chip would otherwise
-     pick up whatever blurs behind the bar. Paint an opaque elevation base under
-     the identical strong tint: composite is #ffffff light / #444a51 dark, which
-     is exactly what the verified label contrast (8.8:1 / 9.0:1) is measured
-     against. */
-  .tab[aria-selected='true'] {
-    background-image: linear-gradient(
-      var(--color-glass-surface-strong),
-      var(--color-glass-surface-strong)
-    );
-    background-color: var(--color-elevation);
-    border-color: var(--color-glass-border);
-    /* Restate the chip silhouette on the glass path so the two rendering
-       paths cannot drift apart: 16px on all four corners, no bridge. */
-    border-radius: var(--radius-glass);
-  }
+.view-home-heading {
+  margin: 0 0 var(--space-xs);
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-text);
 }
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   Dark-mode contrast corrections for glass
-   The light glass tint lifts the dark canvas to a mid tone, so the muted text
-   token drops to ~2.4:1 on it (worst case: blob peak behind the glass ≈
-   #43576A). Scoping a lighter muted value to the glass shells keeps secondary
-   text at ~4.9:1 there; surfaces outside those shells keep the MASTER #8b949e.
-   ───────────────────────────────────────────────────────────────────────────── */
-
-@media (prefers-color-scheme: dark) {
-  .app-header,
-  .tablist,
-  .tabpanel {
-    --color-text-muted: #c9d1d9;
-  }
-
-  /* Transparent secondary buttons sit straight on the panel glass, where the
-     accent label measures ~2.5:1. An opaque control plate restores ~6.4:1
-     without changing the primary/secondary hierarchy. */
-  button.secondary {
-    background: var(--color-control-bg);
-  }
+.view-home-intro {
+  max-width: 60ch;
+  margin: 0 0 var(--space-lg);
+  color: var(--color-text-muted);
+  font-size: 0.9375rem;
 }
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   Reduced transparency — flatten the glass path
-   Users who ask for less transparency get the fallback rendering: no blob layer,
-   no backdrop blur, opaque shell plates. This also removes the per-frame blur
-   cost described above.
-   ───────────────────────────────────────────────────────────────────────────── */
+.home-cards {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-md);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
 
-@media (prefers-reduced-transparency: reduce) {
-  body::before {
-    display: none;
-  }
+/* Opaque card plate. Hover/focus only changes border and shadow — no motion. */
+.home-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  height: 100%;
+  padding: var(--space-lg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-elevation);
+  box-shadow: var(--shadow-sm);
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+}
 
-  /* No frost to sweep across a flattened plate. */
-  .app-header::after {
-    display: none;
-  }
+.home-card:hover,
+.home-card:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: var(--shadow-md);
+}
 
-  .app-header,
-  .tablist,
-  .tabpanel {
-    background: var(--color-elevation);
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
+.home-card-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
 
-  /* The hover frost is a transparency change and would re-introduce a
-     translucent fill over the opaque plate (it outranks the rule above by
-     specificity), so it is pinned back to the flat fill. The hover shadow is
-     left alone — depth, not translucency. */
-  .app-header:hover,
-  .tablist:hover,
-  .tabpanel:hover {
-    background-color: var(--color-elevation);
-  }
+/* Grows so the badge and CTA sit on the card's bottom edge, whatever the
+   description length. */
+.home-card-description {
+  flex: 1 1 auto;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  line-height: 1.55;
+}
+
+.home-card-badge {
+  align-self: flex-start;
+  padding: 0.0625rem var(--space-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+}
+
+.home-card-action {
+  align-self: flex-start;
+  margin-top: var(--space-sm);
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -673,6 +583,14 @@ body::before {
   margin-bottom: 0;
 }
 
+/* The review table closes the PDF primary column but starts hidden (no
+   prescription yet). A hidden sibling still counts for `:last-child`, so the
+   findings section above it would keep a trailing gap that no section fills;
+   drop it while the table is hidden and restore it with the table. */
+.panel-section:has(+ .review-table-section[hidden]) {
+  margin-bottom: 0;
+}
+
 .panel-section h3 {
   margin: 0 0 var(--space-sm);
   font-size: 0.875rem;
@@ -680,6 +598,35 @@ body::before {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--color-text-muted);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Workspace — one column of sections, side-by-side on desktop
+   The left column (inputs / editor) is the first DOM block in every panel, so
+   keyboard order and visual order agree both stacked and in the grid. Children
+   get `min-width: 0` / `min-height: 0` so a long textarea can never push the
+   grid wider than its track (no horizontal scroll, no clipped fields).
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.workspace {
+  display: grid;
+  /* Stacked by default: one full-width column from phone to tablet. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-lg);
+}
+
+.workspace-primary,
+.workspace-secondary {
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Desktop: the input column gets the wider track (3fr / 2fr); the results
+   column keeps ~380px at a 1024px viewport and grows from there. */
+@media (min-width: 1024px) {
+  .workspace {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  }
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -708,9 +655,6 @@ body::before {
   background: var(--color-control-bg);
   color: inherit;
   transition: border-color 150ms ease, box-shadow 150ms ease;
-  /* Controls are opaque on purpose: no glass may bleed into an input. */
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
 }
 
 .field-input {
@@ -747,7 +691,7 @@ select:focus-visible {
 }
 
 /* Emphasised hint (PDF draft banner): opaque warning tint with the same 3px
-   semantic edge as findings, so it stays readable on the glass panel.
+   semantic edge as findings, so it stays readable on the white panel.
    Contrast: warning on warning-bg ≈ 5.0:1 (light) / 6.5:1 (dark). */
 .draft-banner {
   padding: var(--space-sm) var(--space-md);
@@ -756,8 +700,6 @@ select:focus-visible {
   background: var(--color-warning-bg);
   color: var(--color-warning);
   font-weight: 500;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
 }
 
 .field-inline {
@@ -769,6 +711,54 @@ select:focus-visible {
 
 .field-inline .field-hint {
   flex-basis: 100%;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Drop zone (JSON input)
+   The dashed ring exists only while a file hovers the field: idle it is fully
+   transparent, so the Workbench keeps its flat surface. `outline` rather than
+   `border` keeps the field from shifting 2px when the state toggles.
+   The zone is not focusable and has no role: dropping is a pointer-only
+   accelerator, the textarea inside keeps its own focus ring, and typing or
+   pasting there remains the keyboard and assistive-technology path.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.dropzone {
+  border-radius: var(--radius-md);
+  outline: 2px dashed transparent;
+  outline-offset: 4px;
+  transition: outline-color 120ms ease, background-color 120ms ease;
+}
+
+.dropzone.is-drop-target {
+  outline-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 6%, transparent);
+}
+
+/* The hint below the field owns the bottom spacing inside the zone. */
+.dropzone > .field {
+  margin-bottom: 0;
+}
+
+.dropzone-hint {
+  margin: var(--space-xs) 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+/* Polite live region. The line is reserved so a message does not push the
+   action row down; every drop message is a warning — nothing was loaded and
+   the field was left untouched. */
+.dropzone-status {
+  min-height: 1.2em;
+  margin: var(--space-xs) 0 0;
+  font-size: 0.8125rem;
+}
+
+.dropzone-status.is-warning {
+  color: var(--color-warning);
+  font-weight: 600;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -834,8 +824,11 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
+/* Outlined secondary action: an opaque elevation plate with an accent label and
+   the base button's accent border. Contrast holds on both schemes — 8.9:1 in
+   light, 5.5:1 in dark — so it no longer needs a scheme-specific plate. */
 button.secondary {
-  background: transparent;
+  background: var(--color-elevation);
   color: var(--color-accent);
 }
 
@@ -851,13 +844,12 @@ button:disabled {
 /* Icon slot when Lucide never loads (offline / CDN blocked): the <i> survives
    with its helper's inline `width:1em;height:1em`, so as a blockified flex item
    it reserves a 14px dead box — plus the 4px gap — ahead of the label, which
-   pushes the visually centred text ~9px right of the plate centre. That is the
-   off-centre the dark-mode screenshots show (icons absent). `display: none`
-   drops the box and therefore its gap contribution without touching the TS
-   helper and without !important: the inline style sets only width / height /
-   vertical-align / flex-shrink, none of which defeat `display`. A replaced
-   (or otherwise populated) <i> is no longer :empty, so a loaded icon keeps
-   its slot untouched. */
+   pushes the visually centred text ~9px right of the plate centre. `display:
+   none` drops the box and therefore its gap contribution without touching the
+   TS helper and without !important: the inline style sets only width / height /
+   vertical-align / flex-shrink, none of which defeat `display`. A replaced (or
+   otherwise populated) <i> is no longer :empty, so a loaded icon keeps its slot
+   untouched. */
 button > i[data-lucide]:empty {
   display: none;
 }
@@ -871,9 +863,6 @@ button > i[data-lucide]:empty {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface);
-  /* Semantic results stay opaque — never glass, now or later. */
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
 }
 
 .findings-summary {
@@ -893,8 +882,13 @@ button > i[data-lucide]:empty {
   font-size: 0.9375rem;
 }
 
+/* Level heading: icon + label. The icon is a non-colour cue that survives both
+   the Lucide swap and a missing CDN script (see the :empty rule below). */
 .findings-heading {
   margin: var(--space-md) 0 var(--space-xs);
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
   font-size: 0.8125rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -909,6 +903,11 @@ button > i[data-lucide]:empty {
   color: var(--color-warning);
 }
 
+/* Info is the technical/success level: same palette as the success list. */
+.findings-heading.is-success {
+  color: var(--color-success);
+}
+
 .findings-list {
   margin: 0;
   padding: var(--space-sm) var(--space-sm) var(--space-sm) 1.75rem;
@@ -917,11 +916,10 @@ button > i[data-lucide]:empty {
   background: var(--color-surface);
   font-size: 0.875rem;
   line-height: 1.6;
-  /* Opaque tinted plate + 3px semantic edge; glass must never leak in. */
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
 }
 
+/* Opaque tinted plate + 3px semantic edge. Border, tint and text always change
+   together, so each level stays distinguishable without colour perception. */
 .findings-list.is-error {
   border-color: var(--color-error);
   background: var(--color-error-bg);
@@ -940,10 +938,130 @@ button > i[data-lucide]:empty {
   color: var(--color-success);
 }
 
+/* One finding: the level icon keeps its own column so wrapped text stays
+   aligned, and the icon inherits the level colour. */
+.finding {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-xs);
+}
+
+.finding-text {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+/* Icon slot sized for both the Lucide placeholder and its replacement SVG. */
+.findings-heading > i[data-lucide],
+.findings-heading > svg,
+.finding > i[data-lucide],
+.finding > svg,
+.findings-ok > i[data-lucide],
+.findings-ok > svg {
+  width: 1em;
+  height: 1em;
+  flex-shrink: 0;
+}
+
+/* Placeholder that Lucide never replaced (offline / blocked CDN): drop it so it
+   contributes no width and no flex gap. The text label still names the level. */
+.findings-heading > i[data-lucide]:empty,
+.finding > i[data-lucide]:empty,
+.findings-ok > i[data-lucide]:empty {
+  display: none;
+}
+
+/* Path link to the field the finding refers to. Underlined as well as tinted,
+   so the affordance never depends on hue, and it keeps a visible focus ring. */
+.finding-link {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  border-radius: var(--radius-sm);
+}
+
+.finding-link:hover {
+  text-decoration-thickness: 2px;
+}
+
+.finding-link:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
 .finding-path {
   font-family: var(--font-mono);
   font-size: 0.8125rem;
-  opacity: 0.85;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Guided tasks (plan 005, phase 1 — PDF flow only)
+   The task list leads with an actionable sentence and keeps the technical prose
+   one disclosure away. It reuses the error palette and the same icon+text
+   convention as the level lists, so nothing depends on colour alone.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.findings-tasks {
+  margin: var(--space-md) 0 0;
+}
+
+.finding-tasks {
+  margin: 0;
+  padding: var(--space-sm) var(--space-sm) var(--space-sm) 1.75rem;
+  border-left: 3px solid var(--color-error);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.finding-task {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-xs);
+}
+
+.finding-task + .finding-task {
+  margin-top: var(--space-xs);
+}
+
+.finding-task > i[data-lucide],
+.finding-task > svg {
+  width: 1em;
+  height: 1em;
+  flex-shrink: 0;
+  margin-top: 0.35em;
+}
+
+.finding-task > i[data-lucide]:empty {
+  display: none;
+}
+
+.finding-task-text {
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+.finding-task-action {
+  font-weight: 600;
+}
+
+/* The prose stays reachable, one click away, and keeps its own typography. */
+.findings-technical {
+  margin-top: var(--space-md);
+}
+
+.findings-technical-summary {
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.findings-technical-summary:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
 }
 
 .copy-status {
@@ -951,6 +1069,151 @@ button > i[data-lucide]:empty {
   margin: var(--space-sm) 0 0;
   color: var(--color-text-muted);
   font-size: 0.8125rem;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   JSON structured view (CHMED16A → JSON)
+   Presentation only: the read-only textarea stays the canonical data source.
+   Disclosure is the browser-native <details>/<summary>; the summary keeps its
+   native marker (no `display: flex` on the summary, which would remove it) and
+   needs no Lucide icon, so no icon refresh runs for this view.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* Toggle row above the output, outside the copy/download `.actions` rows. */
+.view-toggle {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+
+/* Pressed state doubles the aria-pressed signal with colour and shape. The
+   explicit hover rule re-asserts the accent plate: `button.secondary:hover`
+   would otherwise repaint it with the surface colour. */
+button.view-toggle-button[aria-pressed='true'],
+button.view-toggle-button[aria-pressed='true']:hover:not(:disabled) {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-on-primary);
+}
+
+.json-viewer {
+  display: grid;
+  gap: var(--space-md);
+  margin-bottom: var(--space-md);
+}
+
+/* `[hidden]` (see the global rule near the reset) still wins, so the host can
+   toggle the whole structured view without touching its content. */
+
+.json-section {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-elevation);
+  overflow: hidden; /* keeps the disclosure corners inside the radius */
+}
+
+.json-section-summary {
+  min-height: 2.75rem; /* ≥ 44px touch target */
+  padding: var(--space-sm) var(--space-md);
+  cursor: pointer;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.json-section-summary:focus-visible {
+  /* Inset so `overflow: hidden` on the section cannot clip the ring. */
+  outline: 2px solid var(--color-ring);
+  outline-offset: -2px;
+}
+
+.json-section[open] > .json-section-summary {
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.json-section-title {
+  font-family: var(--font-mono);
+  font-size: 0.875rem;
+  color: var(--color-json-key);
+}
+
+.json-section-hint {
+  margin-left: var(--space-sm);
+  font-weight: 400;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+
+/* Missing-required mark (plan 005, phase 3): a text badge inside the summary,
+   right after the section name and its size hint. The glyph and the words
+   carry the state; the tint only reinforces it, so the mark never depends on
+   colour alone. A placeholder section (absent from the document entirely) uses
+   the same badge on its title-only summary. */
+.json-section-missing {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-xs);
+  margin-left: var(--space-sm);
+  padding: 0.0625rem var(--space-sm);
+  border: 1px solid var(--color-error);
+  border-radius: var(--radius-sm);
+  background: var(--color-error-bg);
+  color: var(--color-error);
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.json-section-missing-icon {
+  font-weight: 700;
+}
+
+/* A placeholder section is title-only: it never opens onto content, so it must
+   not draw the open-state separator that real sections use. */
+.json-section-absent[open] > .json-section-summary {
+  border-bottom: 0;
+}
+
+/* Token colours (aliases in :root): key = accent tint, string = body ink,
+   number = muted ink; boolean = accent with a bolder weight, null = muted
+   italic. Colour alone never has to separate keys from booleans: the colon and
+   the weight do. Contrast against the elevation plate clears 4.5:1 in both
+   schemes (accent 8.86:1 light / 5.47:1 dark; muted 7.53:1 / 5.26:1; body ink
+   17.40:1 / 13.70:1). */
+.json-code {
+  margin: 0;
+  padding: var(--space-md);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--color-json-string);
+  /* Long GTIN/UUID strings wrap instead of forcing horizontal scroll. The page
+     remains the only scroll container: no max-height, no per-section scroll. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.json-key {
+  color: var(--color-json-key);
+  font-weight: 600;
+}
+
+.json-string {
+  color: var(--color-json-string);
+}
+
+.json-number {
+  color: var(--color-json-number);
+}
+
+.json-boolean {
+  color: var(--color-json-boolean);
+  font-weight: 700;
+}
+
+.json-null {
+  color: var(--color-json-null);
+  font-style: italic;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -966,9 +1229,6 @@ button > i[data-lucide]:empty {
   background: var(--color-elevation);
   box-shadow: var(--shadow-sm);
   margin-bottom: var(--space-sm);
-  /* The QR plate must stay fully opaque for reliable scanning. */
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
 }
 
 .qr-preview svg {
@@ -976,8 +1236,6 @@ button > i[data-lucide]:empty {
   height: auto;
   background: var(--color-qr-bg);
   display: block;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
 }
 
 .qr-status {
@@ -1012,9 +1270,6 @@ button > i[data-lucide]:empty {
   border-radius: var(--radius-lg);
   background: var(--color-camera-bg);
   border: 1px solid var(--color-border);
-  /* Solid black plate both modes; no translucency under the video feed. */
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
 }
 
 .scan-status {
@@ -1030,6 +1285,488 @@ button > i[data-lucide]:empty {
 .scan-status.is-warning {
   color: var(--color-warning);
   font-weight: 600;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   PDF flow — step indicator + first-page preview (phase 7a)
+   Presentation only: the panel stays one linear DOM. The active step is carried
+   by text ("Step 2 of 3"), a full accent border, a body-ink label and a filled
+   number disc, so the state never depends on hue alone. No motion is added.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.flow-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin: 0 0 var(--space-lg);
+  padding: 0;
+  list-style: none;
+}
+
+/* Equal tracks that wrap to one column on narrow screens. */
+.flow-step {
+  display: flex;
+  flex: 1 1 9rem;
+  align-items: center;
+  gap: var(--space-sm);
+  min-width: 0;
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+}
+
+/* Decorative disc: the "Step N of 3" text already carries the order for AT. */
+.flow-step-number {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.flow-step-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.flow-step-of {
+  font-size: 0.6875rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.flow-step-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.flow-step[aria-current='step'] {
+  border-color: var(--color-accent);
+  background: var(--color-elevation);
+  color: var(--color-text);
+  box-shadow: var(--shadow-sm);
+}
+
+.flow-step[aria-current='step'] .flow-step-number {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-on-primary);
+}
+
+/* Bordered card around the rendered page. The global `[hidden]` rule keeps it
+   out of the layout until a page exists, so hiding it shifts nothing. */
+.pdf-preview-frame {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-md);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+}
+
+/* A page is a document: it stays white in both schemes (the QR plate's white is
+   the same role) and is capped at 360px of display height. `width: auto` plus
+   `max-width: 100%` keep the intrinsic aspect ratio of the 200 DPI raster. */
+.pdf-preview-canvas {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 360px;
+  border-radius: var(--radius-sm);
+  background: var(--color-qr-bg);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Reserved line, like `.copy-status`: a preview failure must not move the
+   Process button row when it appears or disappears. */
+.pdf-preview-status {
+  min-height: 1.2em;
+  margin: var(--space-sm) 0 0;
+  color: var(--color-warning);
+  font-size: 0.8125rem;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   PDF flow — read-only review table (phase 7b)
+   Presentation of the extracted object only. Status is always icon + word; the
+   semantic class repeats the meaning in colour, so no state depends on hue. The
+   scroll container is focusable (role=region + tabindex), which keeps a wide
+   table keyboard-scrollable on a narrow viewport (WCAG 2.1.1). Dark mode needs
+   no extra rule: every colour here is an existing token.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.review-table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-elevation);
+}
+
+/* Vertical ceiling — medicaments table only (plan 005, phase 4).
+   That table is the one that grows with the document (one row per printed
+   line), so it is the one that can push the rest of step 2 off screen. The cap
+   is `min(60vh, 26rem)`: on a laptop it keeps roughly six rows plus the header
+   in view, on a short window 60vh keeps the page itself scrollable. A table
+   shorter than the cap never scrolls — `max-height` only bites when the body
+   would exceed it — so a short prescription looks exactly as before. The
+   summary table (patient / prescriber / organisation) is deliberately left
+   unbounded: it has a fixed eight rows, and capping it would give a form its own
+   scrollbar for no gain.
+
+   This region stays the ONLY scroll container (no nested scroller): the
+   element that carries `role="region"`/`tabindex="0"` is the same one that
+   scrolls, so keyboard and wheel scrolling behave as they did on the x axis.
+
+   `scroll-padding-block-start` keeps a row that is scrolled into view (focus,
+   `scrollIntoView`, or a guided-task anchor) clear of the sticky header instead
+   of parking it underneath: a focused input's outline is therefore never
+   clipped by the header. */
+.review-table-scroll.is-capped {
+  max-height: min(60vh, 26rem);
+  overflow-y: auto;
+  scroll-padding-block-start: var(--space-2xl);
+}
+
+/* One plate per table, stacked with the section rhythm. */
+.review-table-scroll + .review-table-scroll {
+  margin-top: var(--space-md);
+}
+
+.review-table-scroll:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
+.review-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+/* The caption is the visible table title and the region's accessible name. */
+.review-table-caption {
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-align: left;
+}
+
+.review-table th,
+.review-table td {
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid var(--color-border-subtle);
+  text-align: left;
+  vertical-align: top;
+}
+
+/* Sticky column header (plan 005, phase 4).
+   The header stays visible while the capped region's body scrolls. `sticky` is
+   resolved against the nearest scrollport — the `.review-table-scroll` element —
+   so it can never stick to the viewport, and it is a no-op in the unbounded
+   summary table (whose region never scrolls vertically). The background is an
+   OPAQUE token in both schemes, so rows passing underneath are fully covered;
+   `z-index` lifts the row above the static cells (and above a focused input's
+   outline, which is why the scroll padding above keeps focused rows clear of
+   it). With `border-collapse` a stuck cell can lose its collapsed border, so
+   the separator is an inset shadow on the header cell itself: it always travels
+   with the header at every scroll offset. */
+.review-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border-bottom: none;
+  box-shadow: inset 0 -1px 0 var(--color-border);
+}
+
+.review-table tbody tr:last-child > * {
+  border-bottom: none;
+}
+
+/* A new object section (Patient / Prescriber / Organisation) gets a heavier
+   rule than the field hairline, so the groups read as groups. */
+.review-table tbody + tbody > tr:first-child > * {
+  border-top: 1px solid var(--color-border);
+}
+
+.review-table-group > th {
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.review-table tbody th[scope='row'] {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.review-value {
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+/* GTIN/GLN/medicament id cells. */
+.review-mono {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+.review-pos {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  white-space: nowrap;
+}
+
+.review-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.review-status.is-success {
+  color: var(--color-success);
+}
+
+.review-status.is-warning {
+  color: var(--color-warning);
+}
+
+/* "Absent" is information, not an error: the omission was tolerated by the
+   validator (an implicated absence is reported as "To verify" instead). */
+.review-status.is-neutral {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.review-status > i[data-lucide],
+.review-status > svg {
+  width: 1em;
+  height: 1em;
+  flex-shrink: 0;
+}
+
+/* Placeholder Lucide never replaced (offline / blocked CDN): drop it, the word
+   still carries the status. */
+.review-status > i[data-lucide]:empty {
+  display: none;
+}
+
+/* Names of the implicated fields of a medication row. */
+.review-status-details {
+  margin-left: var(--space-xs);
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+  font-weight: 400;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   PDF flow — inline editing of the review table (phase 7c)
+   A value cell becomes a form control. `min-height: 44px` meets the AA target
+   size (WCAG 2.2, 2.5.8) even though the table is dense: rows grow, but a 34px
+   input in a 0.875rem table would be unusable on touch. `font: inherit` keeps
+   the mono family of the GTIN/GLN cells and the row's own size. Every colour is
+   an existing token, so dark mode needs no extra rule.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* The editable hint sits between the section heading and the first table. */
+.review-hint {
+  margin: 0 0 var(--space-md);
+}
+
+.review-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 6rem;
+  min-height: 44px;
+  padding: var(--space-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-control-bg);
+  color: var(--color-text);
+  font: inherit;
+  line-height: 1.4;
+}
+
+/* Padding lives on the cell so the control can fill it edge to edge. */
+.review-cell-input {
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.review-input:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 1px;
+  border-color: var(--color-ring);
+}
+
+/* Disabled only while the pipeline runs: the value belongs to the run in flight. */
+.review-input:disabled {
+  background: var(--color-control-bg-muted);
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   PDF flow — export recap at step 3 (phase 7d)
+   A definition list, so every row is a real term/value pair for assistive
+   technology. Tone reinforces a word that is always present ("OCR", "Edited",
+   the verdict); no state depends on hue. Every colour is an existing token, so
+   dark mode inherits the scheme without an extra rule.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.recap-list {
+  display: grid;
+  grid-template-columns: minmax(7rem, max-content) minmax(0, 1fr);
+  gap: var(--space-sm) var(--space-md);
+  margin: 0;
+  padding: var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-elevation);
+}
+
+.recap-term {
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.recap-value {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.recap-value.is-warning {
+  color: var(--color-warning);
+  font-weight: 600;
+}
+
+.recap-value.is-success {
+  color: var(--color-success);
+  font-weight: 600;
+}
+
+.recap-value.is-error {
+  color: var(--color-error);
+  font-weight: 600;
+}
+
+/* The absent placeholder ("—") is information, not an error. */
+.recap-value.recap-absent {
+  color: var(--color-text-muted);
+}
+
+/* GLN and other identifier-like tokens. */
+.recap-mono {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+.recap-badge {
+  display: inline-block;
+  padding: 0.0625rem var(--space-sm);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-sm);
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   PDF flow — guided required counter and recap shortcuts (plan 005, phase 1)
+   The counter sits above the tables and states both numbers in words; while the
+   export is gated it adds a second, explicit line so it can never read as
+   complete. The recap buttons are plain secondary controls that only move
+   focus.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.review-required-count {
+  margin: 0 0 var(--space-md);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.review-required-progress {
+  display: block;
+}
+
+.review-required-blocked {
+  display: block;
+  margin-top: var(--space-xs);
+  color: var(--color-error);
+  font-weight: 600;
+}
+
+/* The author `display: block` above would otherwise defeat the UA [hidden] rule. */
+.review-required-blocked[hidden] {
+  display: none;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   PDF flow — advisory hints under editable inputs (plan 005, phase 2)
+   One quiet line under an input, recomputed while typing. It is deliberately
+   NEUTRAL: no `is-error`/`is-warning` tint and no red/amber token, because an
+   advisory is neither a finding nor a verdict — the core validator (and the
+   findings list it feeds) keeps that language. Muted text on the cell's own
+   background clears AA in both schemes through the shared token, so no dark
+   override is needed. The element is not interactive, so the 44px target size
+   rule (which applies to controls) does not add height here.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+.review-advisory {
+  margin: var(--space-xs) 0 0;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.recap-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+}
+
+/* The shortcuts are stable nodes toggled with `hidden` (plan 005, phase 4), so
+   the author `display: flex` above would otherwise defeat the UA `[hidden]`
+   rule — for the container and for each button. `:empty` stays as the guard for
+   a panel that never creates one. */
+.recap-actions[hidden],
+.recap-fix[hidden],
+.recap-actions:empty {
+  display: none;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -1056,18 +1793,25 @@ button > i[data-lucide]:empty {
     padding: 0.5rem 0.75rem;
     font-size: 0.8125rem;
   }
-  .app-header h1 {
-    font-size: 1.25rem;
+  .brand-name {
+    font-size: 1.125rem;
+  }
+  .home-card {
+    padding: var(--space-md);
   }
 }
 
 /* 768px – tablet */
 @media (min-width: 768px) {
   .app {
+    max-width: 52rem;
     padding: var(--space-2xl) var(--space-lg) var(--space-2xl);
   }
-  .app-header h1 {
-    font-size: 1.75rem;
+  .brand-name {
+    font-size: 1.5rem;
+  }
+  .home-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .tab {
     padding: 0.75rem 1.25rem;
@@ -1077,13 +1821,9 @@ button > i[data-lucide]:empty {
 /* 1024px – small desktop */
 @media (min-width: 1024px) {
   .app {
-    max-width: 52rem;
+    max-width: min(72rem, 100%);
   }
-}
-
-/* 1440px – large desktop */
-@media (min-width: 1440px) {
-  .app {
-    max-width: 56rem;
+  .home-cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
